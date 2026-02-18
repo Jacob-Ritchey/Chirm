@@ -214,11 +214,10 @@ function renderMembersList() {
   const renderMember = (m) => {
     const div = document.createElement('div');
     div.className = 'member-item';
-    const color = stringToColor(m.username);
     const roleBadge = m.is_owner ? `<span class="role-badge badge-owner" style="font-size:10px">Owner</span>` :
       m.roles?.length ? `<span style="color:${m.roles[0].color};font-size:11px">${esc(m.roles[0].name)}</span>` : '';
     div.innerHTML = `
-      <div class="avatar avatar-sm" style="background:${color}">${m.username[0].toUpperCase()}</div>
+      ${avatar(m, 'avatar-sm')}
       <div style="flex:1;min-width:0">
         <div class="member-name">${esc(m.username)}</div>
         ${roleBadge}
@@ -730,15 +729,17 @@ function setupWSHandlers() {
 
     // Check for duplicate
     if (App.messages[channelId].find(m => m.id === msg.id)) return;
+
+    // Get prev BEFORE push — slice(-2)[0] after push would return msg itself when array was empty
+    const prev = App.messages[channelId].at(-1);
     App.messages[channelId].push(msg);
 
     if (App.currentChannel?.id === channelId) {
       const nearBottom = isNearBottom();
       const list = document.getElementById('messages-list');
-      const prev = App.messages[channelId].slice(-2)[0];
-      const ts = new Date(msg.created_at).getTime();
+      const ts     = new Date(msg.created_at).getTime();
       const prevTs = prev ? new Date(prev.created_at).getTime() : 0;
-      const continued = prev?.user_id === msg.user_id && ts - prevTs < 5 * 60 * 1000;
+      const continued = !!prev && prev.user_id === msg.user_id && ts - prevTs < 5 * 60 * 1000;
       list.appendChild(renderMessage(msg, continued));
       if (nearBottom) scrollToBottom();
     } else {
@@ -1452,18 +1453,28 @@ function toggleMembers() {
 })();
 
 // ─── VIEWPORT HEIGHT FIX ──────────────────────────────────────────────────────
-// Sets --app-height to window.innerHeight so mobile browsers that misreport
-// 100svh (including some Android Firefox versions) still get the right value.
+// Uses visualViewport API (when available) which correctly reports height
+// EXCLUDING the soft keyboard on Android/iOS — window.innerHeight often does not.
 function fixViewportHeight() {
-  const h = window.innerHeight;
-  document.documentElement.style.setProperty('--app-height', h + 'px');
-  // Apply directly to #app as well as a belt-and-suspenders approach
+  const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
   const app = document.getElementById('app');
   if (app) app.style.height = h + 'px';
+
+  // When keyboard is up, also ensure messages scroll to keep the last message visible
+  if (isNearBottom && isNearBottom()) scrollToBottom();
 }
-window.addEventListener('resize', fixViewportHeight);
-window.addEventListener('orientationchange', () => setTimeout(fixViewportHeight, 150));
-// Run immediately before DOM is fully ready, and again after
+
+if (window.visualViewport) {
+  // visualViewport fires on keyboard open/close AND orientation change
+  window.visualViewport.addEventListener('resize', fixViewportHeight);
+  window.visualViewport.addEventListener('scroll', fixViewportHeight);
+} else {
+  // Fallback for browsers without visualViewport
+  window.addEventListener('resize', fixViewportHeight);
+}
+window.addEventListener('orientationchange', () => setTimeout(fixViewportHeight, 200));
+
+// Run before DOMContentLoaded so height is set before first paint
 fixViewportHeight();
 document.addEventListener('DOMContentLoaded', fixViewportHeight);
 
@@ -1475,6 +1486,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const input = document.getElementById('message-input');
   input.addEventListener('keydown', onInputKeydown);
   input.addEventListener('input', () => resizeInput(input));
+
+  // On mobile: when keyboard opens (input focus), scroll to bottom so
+  // messages aren't hidden behind keyboard while input is revealed
+  input.addEventListener('focus', () => {
+    // Small delay lets the keyboard fully open and visualViewport update
+    setTimeout(() => {
+      fixViewportHeight();
+      scrollToBottom(true);
+    }, 300);
+  });
 
   const form = document.getElementById('message-form');
   form.addEventListener('submit', (e) => { e.preventDefault(); sendMessage(); });
