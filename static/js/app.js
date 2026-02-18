@@ -249,7 +249,7 @@ async function openChannel(ch) {
   App.unread.delete(ch.id);
 
   // Close mobile sidebar when channel selected
-  if (window.innerWidth <= 768) toggleSidebar(true);
+  if (PanelMgr.isMobile()) PanelMgr.close('channels');
 
   // Update sidebar
   document.querySelectorAll('.channel-item').forEach(el => {
@@ -514,9 +514,12 @@ function clearUploadPreview() {
 }
 
 function openImageViewer(src) {
-  const overlay = document.createElement('div');
-  overlay.id = 'img-viewer';
-  overlay.innerHTML = `
+  // Close any open sidebars first so their overlay doesn't conflict
+  closeAllPanels();
+
+  const viewer = document.createElement('div');
+  viewer.id = 'img-viewer';
+  viewer.innerHTML = `
     <div id="img-viewer-bg"></div>
     <div id="img-viewer-toolbar">
       <button id="img-viewer-close" title="Close">✕</button>
@@ -526,20 +529,27 @@ function openImageViewer(src) {
       <img id="img-viewer-img" src="${src}" draggable="false">
     </div>
   `;
-  document.body.appendChild(overlay);
+  document.body.appendChild(viewer);
 
-  const stage = overlay.querySelector('#img-viewer-stage');
-  const img = overlay.querySelector('#img-viewer-img');
+  const stage  = viewer.querySelector('#img-viewer-stage');
+  const img    = viewer.querySelector('#img-viewer-img');
+  const bg     = viewer.querySelector('#img-viewer-bg');
+
+  // Disable browser pinch-zoom while viewer is open
+  const vpMeta = document.querySelector('meta[name=viewport]');
+  if (vpMeta) vpMeta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
 
   // ── State ──
   let scale = 1, minScale = 1, maxScale = 8;
-  let tx = 0, ty = 0;           // translate
-  let startTx = 0, startTy = 0; // translate at gesture start
+  let tx = 0, ty = 0;
+  let startTx = 0, startTy = 0;
   let isDragging = false;
+  let didMove = false; // distinguish tap-to-close from pan
 
   // Pinch state
   let lastDist = 0, startScale = 1;
   let pinchOriginX = 0, pinchOriginY = 0;
+  let isPinching = false;
 
   function clampTranslate(x, y, s) {
     const iw = img.naturalWidth  * s;
@@ -554,38 +564,40 @@ function openImageViewer(src) {
     ];
   }
 
-  function applyTransform(s, x, y) {
+  function applyTransform(s, x, y, animate = false) {
     scale = Math.min(maxScale, Math.max(minScale, s));
     [tx, ty] = clampTranslate(x, y, scale);
-    img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    img.style.transition = animate ? 'transform 0.22s cubic-bezier(0.25,0.46,0.45,0.94)' : 'none';
+    img.style.transform  = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    stage.style.cursor   = scale > minScale + 0.01 ? 'grab' : 'zoom-in';
+  }
+
+  function snapToFit(animate = true) {
+    applyTransform(minScale, 0, 0, animate);
   }
 
   function dist(t) {
-    const dx = t[0].clientX - t[1].clientX;
-    const dy = t[0].clientY - t[1].clientY;
-    return Math.hypot(dx, dy);
+    return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  }
+  function mid(t) {
+    return { x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 };
   }
 
-  function midpoint(t) {
-    return {
-      x: (t[0].clientX + t[1].clientX) / 2,
-      y: (t[0].clientY + t[1].clientY) / 2,
-    };
-  }
-
-  // ── Touch handlers ──
+  // ── Touch ──
   stage.addEventListener('touchstart', (e) => {
+    didMove = false;
     if (e.touches.length === 2) {
+      isPinching = true;
+      isDragging = false;
       e.preventDefault();
-      lastDist = dist(e.touches);
+      lastDist   = dist(e.touches);
       startScale = scale;
-      const mid = midpoint(e.touches);
+      const m    = mid(e.touches);
       const rect = stage.getBoundingClientRect();
-      // Pinch origin relative to image center
-      pinchOriginX = mid.x - rect.left - rect.width / 2 - tx;
-      pinchOriginY = mid.y - rect.top  - rect.height / 2 - ty;
+      pinchOriginX = m.x - rect.left - rect.width  / 2 - tx;
+      pinchOriginY = m.y - rect.top  - rect.height / 2 - ty;
       startTx = tx; startTy = ty;
-    } else if (e.touches.length === 1) {
+    } else if (e.touches.length === 1 && !isPinching) {
       isDragging = true;
       startTx = tx - e.touches[0].clientX;
       startTy = ty - e.touches[0].clientY;
@@ -594,14 +606,15 @@ function openImageViewer(src) {
 
   stage.addEventListener('touchmove', (e) => {
     e.preventDefault();
-    if (e.touches.length === 2) {
-      const newDist = dist(e.touches);
+    didMove = true;
+    if (e.touches.length === 2 && isPinching) {
+      const newDist  = dist(e.touches);
       const newScale = startScale * (newDist / lastDist);
-      // Keep pinch origin fixed while scaling
-      const scaleRatio = newScale / startScale;
-      const newTx = startTx - pinchOriginX * (scaleRatio - 1);
-      const newTy = startTy - pinchOriginY * (scaleRatio - 1);
-      applyTransform(newScale, newTx, newTy);
+      const ratio    = newScale / startScale;
+      applyTransform(newScale,
+        startTx - pinchOriginX * (ratio - 1),
+        startTy - pinchOriginY * (ratio - 1)
+      );
     } else if (e.touches.length === 1 && isDragging) {
       applyTransform(scale,
         e.touches[0].clientX + startTx,
@@ -611,91 +624,102 @@ function openImageViewer(src) {
   }, { passive: false });
 
   stage.addEventListener('touchend', (e) => {
-    if (e.touches.length < 2) isDragging = false;
-    // Snap back if zoomed out below 1
-    if (scale <= 1.05) applyTransform(1, 0, 0);
+    if (e.touches.length === 0) isPinching = false;
+    if (e.touches.length < 2)  isDragging = false;
+    // Snap back to fit if zoomed too far out
+    if (scale < minScale + 0.02) snapToFit(true);
   });
 
-  // Double-tap to toggle zoom
+  // Double-tap: toggle between fit and 3×
   let lastTap = 0;
   stage.addEventListener('touchend', (e) => {
-    if (e.touches.length > 0) return;
+    if (e.touches.length > 0 || didMove) return;
     const now = Date.now();
     if (now - lastTap < 280) {
-      if (scale > 1.5) {
-        applyTransform(1, 0, 0);
+      if (scale > minScale + 0.5) {
+        snapToFit(true);
       } else {
-        const touch = e.changedTouches[0];
+        const t    = e.changedTouches[0];
         const rect = stage.getBoundingClientRect();
-        const ox = touch.clientX - rect.left - rect.width / 2;
-        const oy = touch.clientY - rect.top  - rect.height / 2;
-        applyTransform(3, -ox, -oy);
+        applyTransform(3,
+          -(t.clientX - rect.left - rect.width  / 2),
+          -(t.clientY - rect.top  - rect.height / 2),
+          true
+        );
       }
     }
     lastTap = now;
   });
 
-  // ── Mouse wheel zoom (desktop) ──
+  // Single tap on stage (not image) → close
+  stage.addEventListener('click', (e) => {
+    if (didMove) return;
+    // If the click is on the background (not the image itself), close
+    if (e.target === stage) closeViewer();
+  });
+  bg.addEventListener('click', closeViewer);
+
+  // ── Mouse wheel zoom ──
   stage.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const rect = stage.getBoundingClientRect();
-    const ox = e.clientX - rect.left - rect.width / 2 - tx;
-    const oy = e.clientY - rect.top  - rect.height / 2 - ty;
+    const rect  = stage.getBoundingClientRect();
+    const ox    = e.clientX - rect.left - rect.width  / 2 - tx;
+    const oy    = e.clientY - rect.top  - rect.height / 2 - ty;
     const delta = e.deltaY < 0 ? 1.15 : 0.87;
-    const newScale = scale * delta;
-    const scaleRatio = newScale / scale;
-    applyTransform(newScale, tx - ox * (scaleRatio - 1), ty - oy * (scaleRatio - 1));
+    const ns    = scale * delta;
+    const ratio = ns / scale;
+    if (ns <= minScale + 0.02) { snapToFit(true); return; }
+    applyTransform(ns, tx - ox * (ratio - 1), ty - oy * (ratio - 1));
   }, { passive: false });
 
-  // ── Mouse drag (desktop) ──
+  // ── Mouse drag ──
+  let mouseDown = false;
   stage.addEventListener('mousedown', (e) => {
-    if (scale <= 1) return;
-    isDragging = true;
+    if (e.button !== 0) return;
+    didMove    = false;
+    mouseDown  = true;
+    isDragging = scale > minScale + 0.01;
     startTx = tx - e.clientX;
     startTy = ty - e.clientY;
-    stage.style.cursor = 'grabbing';
-    e.preventDefault();
+    if (isDragging) { stage.style.cursor = 'grabbing'; e.preventDefault(); }
   });
   window.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    applyTransform(scale, e.clientX + startTx, e.clientY + startTy);
+    if (!mouseDown) return;
+    if (Math.abs(e.movementX) + Math.abs(e.movementY) > 2) didMove = true;
+    if (isDragging) applyTransform(scale, e.clientX + startTx, e.clientY + startTy);
   });
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('mouseup', (e) => {
+    if (!mouseDown) return;
+    mouseDown = false;
+    if (!isDragging && !didMove && e.target === stage) closeViewer();
     isDragging = false;
-    stage.style.cursor = scale > 1 ? 'grab' : 'zoom-out';
+    stage.style.cursor = scale > minScale + 0.01 ? 'grab' : 'zoom-in';
   });
 
   // ── Close ──
-  overlay.querySelector('#img-viewer-close').onclick = closeViewer;
-  overlay.querySelector('#img-viewer-bg').onclick = closeViewer;
-  document.addEventListener('keydown', keyClose);
+  viewer.querySelector('#img-viewer-close').onclick = closeViewer;
+  document.addEventListener('keydown', onKey);
 
-  function keyClose(e) {
-    if (e.key === 'Escape') closeViewer();
-  }
+  function onKey(e) { if (e.key === 'Escape') closeViewer(); }
   function closeViewer() {
-    overlay.remove();
-    document.removeEventListener('keydown', keyClose);
-    // Restore browser zoom
-    const vp = document.querySelector('meta[name=viewport]');
-    if (vp) vp.content = 'width=device-width, initial-scale=1.0';
+    viewer.remove();
+    document.removeEventListener('keydown', onKey);
+    if (vpMeta) vpMeta.content = 'width=device-width, initial-scale=1.0';
   }
 
-  // Disable browser pinch-zoom while viewer is open
-  const vp = document.querySelector('meta[name=viewport]');
-  if (vp) vp.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
-
-  // Update cursor hint based on scale
-  stage.style.cursor = 'zoom-in';
-  img.addEventListener('load', () => {
-    // Auto-set minScale so image fills stage without letterboxing beyond natural size
-    const sw = stage.clientWidth, sh = stage.clientHeight;
+  // ── Init: compute fit scale after image loads ──
+  function initScale() {
+    const sw  = stage.clientWidth  || window.innerWidth;
+    const sh  = stage.clientHeight || (window.innerHeight - 56);
     const fit = Math.min(sw / img.naturalWidth, sh / img.naturalHeight, 1);
-    minScale = fit;
-    scale = fit < 1 ? fit : 1;
-    applyTransform(scale, 0, 0);
-    stage.style.cursor = 'zoom-in';
-  });
+    minScale  = fit;
+    applyTransform(fit, 0, 0, false);
+  }
+  if (img.complete && img.naturalWidth) {
+    initScale();
+  } else {
+    img.addEventListener('load', initScale);
+  }
 }
 
 // ─── WEBSOCKET HANDLERS ───────────────────────────────────────────────────────
@@ -1290,44 +1314,142 @@ function switchAdminTab(tab) {
   document.getElementById(`admin-pane-${tab}`).classList.add('active');
 }
 
-// ─── MOBILE SIDEBAR TOGGLE ────────────────────────────────────────────────────
+// ─── PANEL MANAGER ────────────────────────────────────────────────────────────
+// Single source of truth for which panel (if any) is open on mobile.
+// Prevents the shared-overlay conflicts that caused cross-opening bugs.
+
+const PanelMgr = (() => {
+  let current = null; // 'channels' | 'members' | null
+
+  const overlay = () => document.getElementById('sidebar-overlay');
+  const main    = () => document.getElementById('main');
+
+  function _showOverlay(onClick) {
+    const el = overlay();
+    el.classList.add('open');
+    el._closeHandler = onClick;
+    el.addEventListener('click', onClick, { once: true });
+    // Dead-zone: prevent accidental taps/edits on the chat while a panel is open
+    const m = main();
+    if (m) m.style.pointerEvents = 'none';
+  }
+
+  function _hideOverlay() {
+    const el = overlay();
+    if (el._closeHandler) {
+      el.removeEventListener('click', el._closeHandler);
+      el._closeHandler = null;
+    }
+    el.classList.remove('open');
+    const m = main();
+    if (m) m.style.pointerEvents = '';
+  }
+
+  function open(panel) {
+    if (current && current !== panel) close(current);
+    current = panel;
+
+    if (panel === 'channels') {
+      document.getElementById('sidebar').classList.add('open');
+    } else if (panel === 'members') {
+      document.getElementById('members-sidebar').classList.add('overlay-open');
+    }
+    _showOverlay(() => close(panel));
+  }
+
+  function close(panel) {
+    if (panel === 'channels') {
+      document.getElementById('sidebar').classList.remove('open');
+    } else if (panel === 'members') {
+      document.getElementById('members-sidebar').classList.remove('overlay-open');
+    }
+    _hideOverlay();
+    if (current === panel) current = null;
+  }
+
+  function closeAll() {
+    if (current) close(current);
+  }
+
+  function isOpen(panel) { return current === panel; }
+  function isMobile()    { return window.innerWidth <= 768; }
+  function isTablet()    { return window.innerWidth <= 1024; }
+
+  return { open, close, closeAll, isOpen, isMobile, isTablet };
+})();
+
+function closeAllPanels() { PanelMgr.closeAll(); }
+
 function toggleSidebar(forceClose = false) {
-  const sidebar = document.getElementById('sidebar');
-  const overlay = document.getElementById('sidebar-overlay');
-  const isOpen = sidebar.classList.contains('open');
-  if (forceClose || isOpen) {
-    sidebar.classList.remove('open');
-    overlay.classList.remove('open');
+  if (forceClose || PanelMgr.isOpen('channels')) {
+    PanelMgr.close('channels');
   } else {
-    sidebar.classList.add('open');
-    overlay.classList.add('open');
+    // Only use overlay behaviour on mobile; on desktop the sidebar is always visible
+    if (PanelMgr.isMobile()) {
+      PanelMgr.open('channels');
+    }
   }
 }
 
 function toggleMembers() {
   const panel = document.getElementById('members-sidebar');
-  const isMobile = window.innerWidth <= 1024;
 
-  if (isMobile) {
-    // On tablet/mobile: slide in as overlay panel
-    const isOpen = panel.classList.contains('overlay-open');
-    panel.classList.toggle('overlay-open', !isOpen);
-
-    // Tap-outside to close — reuse sidebar overlay element
-    const overlay = document.getElementById('sidebar-overlay');
-    if (!isOpen) {
-      overlay.classList.add('open');
-      // Temporarily redirect overlay click to close members
-      overlay._memberClose = () => { toggleMembers(); };
-      overlay.addEventListener('click', overlay._memberClose, { once: true });
+  if (PanelMgr.isTablet()) {
+    // Tablet/mobile: overlay panel
+    if (PanelMgr.isOpen('members')) {
+      PanelMgr.close('members');
     } else {
-      overlay.classList.remove('open');
+      PanelMgr.open('members');
     }
   } else {
-    // On desktop: collapse/expand in-place with smooth CSS transition
+    // Desktop: collapse in-place
     panel.classList.toggle('collapsed');
   }
 }
+
+// ─── SWIPE TO CLOSE SIDEBARS ──────────────────────────────────────────────────
+(function addSwipeListeners() {
+  let swipeStartX = 0, swipeStartY = 0;
+  const THRESHOLD = 60;  // px needed to trigger close
+  const ANGLE_MAX = 40;  // max angle from horizontal (degrees)
+
+  function onTouchStart(e) {
+    swipeStartX = e.touches[0].clientX;
+    swipeStartY = e.touches[0].clientY;
+  }
+
+  function onTouchEnd(e) {
+    const dx = e.changedTouches[0].clientX - swipeStartX;
+    const dy = e.changedTouches[0].clientY - swipeStartY;
+    const angle = Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
+    const isHorizontal = angle < ANGLE_MAX || angle > (180 - ANGLE_MAX);
+
+    if (!isHorizontal || Math.abs(dx) < THRESHOLD) return;
+
+    // Swipe LEFT on channels (left panel) → close
+    if (dx < 0 && PanelMgr.isOpen('channels')) {
+      PanelMgr.close('channels');
+    }
+    // Swipe RIGHT on members (right panel) → close
+    if (dx > 0 && PanelMgr.isOpen('members')) {
+      PanelMgr.close('members');
+    }
+  }
+
+  // Attach to sidebars themselves so swiping on them closes them
+  document.addEventListener('DOMContentLoaded', () => {
+    const sidebar  = document.getElementById('sidebar');
+    const members  = document.getElementById('members-sidebar');
+    [sidebar, members].forEach(el => {
+      el.addEventListener('touchstart', onTouchStart, { passive: true });
+      el.addEventListener('touchend',   onTouchEnd,   { passive: true });
+    });
+    // Also swipe from overlay
+    const ovl = document.getElementById('sidebar-overlay');
+    ovl.addEventListener('touchstart', onTouchStart, { passive: true });
+    ovl.addEventListener('touchend',   onTouchEnd,   { passive: true });
+  });
+})();
 
 // ─── VIEWPORT HEIGHT FIX ──────────────────────────────────────────────────────
 // Sets --app-height to window.innerHeight so mobile browsers that misreport

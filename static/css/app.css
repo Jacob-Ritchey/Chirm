@@ -667,6 +667,8 @@ pre code { background: none; border: none; padding: 0; }
   position: absolute; inset: 0;
   background: rgba(0, 0, 0, 0.92);
   animation: fade-in 0.15s ease;
+  /* bg is behind stage; stage click handles close, bg is fallback for toolbar gap */
+  z-index: 0;
 }
 #img-viewer-toolbar {
   position: relative; z-index: 1;
@@ -746,27 +748,37 @@ pre code { background: none; border: none; padding: 0; }
 }
 #hamburger-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 
-/* ─── TABLET: members panel becomes optional overlay ─── */
+/* ─── TABLET: members panel becomes overlay drawer ─── */
 @media (max-width: 1024px) {
-  /* Hidden by default at tablet width, toggle brings it back as overlay */
   #members-sidebar {
-    display: none;
     position: fixed;
     top: 0; right: 0;
     height: 100%;
     height: 100svh;
     width: 240px;
+    min-width: 240px;
     z-index: 201;
     border-left: 1px solid var(--border);
     box-shadow: -8px 0 32px rgba(0,0,0,0.5);
     padding: 16px 8px;
-    /* Override transition — use transform slide instead */
-    transition: none;
+    /* Slide off-screen right by default */
+    transform: translateX(100%);
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    /* Remove the width-based collapse transition at this breakpoint */
+    width: 240px !important;
+    opacity: 1 !important;
+    overflow: visible;
   }
-  #members-sidebar.collapsed { display: none; }
-  /* When toggled open on tablet/mobile, show as overlay */
   #members-sidebar.overlay-open {
-    display: block;
+    transform: translateX(0);
+  }
+  /* Desktop collapse class has no effect at tablet — panel is always out of flow */
+  #members-sidebar.collapsed {
+    transform: translateX(100%);
+    width: 240px !important;
+    padding: 16px 8px !important;
+    opacity: 1 !important;
+    border-left: 1px solid var(--border) !important;
   }
 }
 
