@@ -8,6 +8,7 @@
 </head>
 <body>
 
+<div id="sidebar-overlay" onclick="toggleSidebar()"></div>
 <div id="app">
 
   <!-- ─── LEFT SIDEBAR ─── -->
@@ -36,6 +37,7 @@
   <!-- ─── MAIN CONTENT ─── -->
   <div id="main">
     <div id="channel-header">
+      <button id="hamburger-btn" onclick="toggleSidebar()" title="Toggle Menu">☰</button>
       <span class="ch-hash">#</span>
       <span id="ch-title" class="ch-title">Select a channel</span>
       <span id="ch-desc" class="ch-desc"></span>

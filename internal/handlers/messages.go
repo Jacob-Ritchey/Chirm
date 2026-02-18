@@ -79,6 +79,20 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Link any pre-uploaded attachments to this message
+	for _, attID := range req.Attachments {
+		if attID != "" {
+			h.db.LinkAttachment(attID, msg.ID)
+		}
+	}
+
+	// Re-fetch so the response includes attachment data
+	if len(req.Attachments) > 0 {
+		if full, err := h.db.GetMessageByID(msg.ID); err == nil {
+			msg = full
+		}
+	}
+
 	// Broadcast to all channel subscribers
 	h.hub.BroadcastToChannel(channelID, WSEvent{Type: "message.new", Data: msg})
 	// Also broadcast globally so sidebar can show unread indicators

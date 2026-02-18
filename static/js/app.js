@@ -192,11 +192,14 @@ function renderChannelList() {
 
 function renderUserPanel() {
   const el = document.getElementById('user-info');
+  const avatarHtml = App.user.avatar
+    ? `<div class="avatar avatar-sm"><img src="${esc(App.user.avatar)}" alt="${esc(App.user.username)}"></div>`
+    : `<div class="avatar avatar-sm" style="background:${stringToColor(App.user.username)}">${App.user.username[0].toUpperCase()}</div>`;
   el.innerHTML = `
-    <div class="avatar avatar-sm" style="background:${stringToColor(App.user.username)}">${App.user.username[0].toUpperCase()}</div>
+    ${avatarHtml}
     <div class="user-info">
       <div class="user-name">${esc(App.user.username)}</div>
-      <div class="user-tag">Member</div>
+      <div class="user-tag">${App.user.is_owner ? 'Owner' : 'Member'}</div>
     </div>
   `;
 }
@@ -244,6 +247,9 @@ function renderMembersList() {
 async function openChannel(ch) {
   App.currentChannel = ch;
   App.unread.delete(ch.id);
+
+  // Close mobile sidebar when channel selected
+  if (window.innerWidth <= 620) toggleSidebar(true);
 
   // Update sidebar
   document.querySelectorAll('.channel-item').forEach(el => {
@@ -969,20 +975,94 @@ async function openAssignRole(userId) {
 
 // ─── PROFILE MODAL ────────────────────────────────────────────────────────────
 function openProfile() {
+  const avatarPreview = App.user.avatar
+    ? `<img src="${esc(App.user.avatar)}" style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:2px solid var(--border-strong)">`
+    : `<div class="avatar avatar-lg" style="background:${stringToColor(App.user.username)}">${App.user.username[0].toUpperCase()}</div>`;
+
   const form = `
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;padding:16px;background:var(--bg-elevated);border-radius:var(--radius)">
+      <div id="avatar-preview-wrap">${avatarPreview}</div>
+      <div>
+        <div style="font-weight:600;margin-bottom:4px">${esc(App.user.username)}</div>
+        <label class="btn btn-sm btn-secondary" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px">
+          📷 Change Avatar
+          <input type="file" id="profile-avatar-file" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none">
+        </label>
+        ${App.user.avatar ? `<button class="btn btn-sm btn-ghost" style="margin-left:4px" onclick="clearAvatar()">Remove</button>` : ''}
+      </div>
+    </div>
     <div class="form-group"><label>Username</label><input type="text" id="profile-username" value="${esc(App.user.username)}"></div>
-    <div class="form-group"><label>Avatar URL (optional)</label><input type="text" id="profile-avatar" value="${esc(App.user.avatar||'')}" placeholder="https://..."></div>
+    <div id="avatar-upload-status" style="font-size:12px;color:var(--text-muted);margin-top:-8px;margin-bottom:8px"></div>
   `;
+
   showSimpleModal('Edit Profile', form, async () => {
     const username = document.getElementById('profile-username').value.trim();
-    const avatar = document.getElementById('profile-avatar').value.trim();
     if (!username) { toast('Username required', 'error'); return false; }
+
+    // Avatar: upload file if selected, otherwise keep existing
+    const fileInput = document.getElementById('profile-avatar-file');
+    let avatarUrl = App.user.avatar || '';
+
+    if (fileInput?.files?.length > 0) {
+      const formData = new FormData();
+      formData.append('avatar', fileInput.files[0]);
+      const statusEl = document.getElementById('avatar-upload-status');
+      if (statusEl) statusEl.textContent = 'Uploading avatar…';
+      try {
+        const res = await fetch('/api/me/avatar', {
+          method: 'POST',
+          credentials: 'include',
+          body: formData,
+        });
+        if (!res.ok) {
+          const d = await res.json();
+          toast(d.error || 'Avatar upload failed', 'error');
+          return false;
+        }
+        const updated = await res.json();
+        App.user = updated;
+        renderUserPanel();
+        toast('Profile updated', 'success');
+        return true;
+      } catch (e) {
+        toast('Avatar upload failed', 'error');
+        return false;
+      }
+    }
+
     try {
-      App.user = await api.put('/api/me', { username, avatar });
+      App.user = await api.put('/api/me', { username, avatar: avatarUrl });
       renderUserPanel();
       toast('Profile updated', 'success');
     } catch (e) { toast(e.message, 'error'); return false; }
   });
+
+  // Wire up file input preview after modal renders
+  setTimeout(() => {
+    const fileInput = document.getElementById('profile-avatar-file');
+    if (!fileInput) return;
+    fileInput.addEventListener('change', () => {
+      if (!fileInput.files?.length) return;
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const wrap = document.getElementById('avatar-preview-wrap');
+        if (wrap) wrap.innerHTML = `<img src="${e.target.result}" style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:2px solid var(--accent)">`;
+      };
+      reader.readAsDataURL(file);
+      const status = document.getElementById('avatar-upload-status');
+      if (status) status.textContent = `Selected: ${file.name}`;
+    });
+  }, 50);
+}
+
+async function clearAvatar() {
+  try {
+    App.user = await api.put('/api/me', { username: App.user.username, avatar: '' });
+    renderUserPanel();
+    toast('Avatar removed', 'success');
+    document.querySelector('.modal-overlay')?.remove();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ─── MODAL HELPERS ────────────────────────────────────────────────────────────
@@ -1032,6 +1112,20 @@ function switchAdminTab(tab) {
   document.querySelectorAll('.admin-pane').forEach(el => el.classList.remove('active'));
   document.querySelector(`.admin-tab[data-tab="${tab}"]`).classList.add('active');
   document.getElementById(`admin-pane-${tab}`).classList.add('active');
+}
+
+// ─── MOBILE SIDEBAR TOGGLE ────────────────────────────────────────────────────
+function toggleSidebar(forceClose = false) {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  const isOpen = sidebar.classList.contains('open');
+  if (forceClose || isOpen) {
+    sidebar.classList.remove('open');
+    overlay.classList.remove('open');
+  } else {
+    sidebar.classList.add('open');
+    overlay.classList.add('open');
+  }
 }
 
 // ─── BOOT ─────────────────────────────────────────────────────────────────────

@@ -587,6 +587,11 @@ func (d *DB) GetAttachments(messageID string) ([]Attachment, error) {
 	return atts, nil
 }
 
+func (d *DB) LinkAttachment(attachmentID, messageID string) error {
+	_, err := d.Exec(`UPDATE attachments SET message_id = ? WHERE id = ?`, messageID, attachmentID)
+	return err
+}
+
 // --- Invites ---
 
 func (d *DB) CreateInvite(createdBy string, maxUses int, expiresAt *time.Time) (*Invite, error) {

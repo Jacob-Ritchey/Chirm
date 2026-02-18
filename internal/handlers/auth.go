@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -169,3 +172,75 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	updated, _ := h.db.GetUserByID(u.ID)
 	ok(w, updated)
 }
+
+// UploadAvatar accepts a multipart image, saves it, and updates the user's avatar field.
+func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
+	u, err := h.currentUser(r)
+	if err != nil || u == nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 5*1024*1024) // 5 MB cap for avatars
+	if err := r.ParseMultipartForm(5 * 1024 * 1024); err != nil {
+		errResp(w, http.StatusBadRequest, "file too large (max 5MB)")
+		return
+	}
+
+	file, header, err := r.FormFile("avatar")
+	if err != nil {
+		errResp(w, http.StatusBadRequest, "no file provided")
+		return
+	}
+	defer file.Close()
+
+	// Detect type from first 512 bytes
+	buf := make([]byte, 512)
+	n, _ := file.Read(buf)
+	mimeType := http.DetectContentType(buf[:n])
+
+	allowedAvatarTypes := map[string]bool{
+		"image/jpeg": true,
+		"image/png":  true,
+		"image/gif":  true,
+		"image/webp": true,
+	}
+	if !allowedAvatarTypes[mimeType] {
+		errResp(w, http.StatusBadRequest, "avatar must be JPEG, PNG, GIF or WebP")
+		return
+	}
+
+	// Seek back, then save
+	file.Seek(0, 0)
+
+	// Generate unique filename
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = ".jpg"
+	}
+	filename := "avatar_" + newID() + ext
+	destPath := filepath.Join(h.dataDir, "uploads", filename)
+
+	dest, err := os.Create(destPath)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to save avatar")
+		return
+	}
+	defer dest.Close()
+	if _, err := io.Copy(dest, file); err != nil {
+		os.Remove(destPath)
+		errResp(w, http.StatusInternalServerError, "failed to write avatar")
+		return
+	}
+
+	avatarURL := "/uploads/" + filename
+	if err := h.db.UpdateUser(u.ID, u.Username, avatarURL); err != nil {
+		os.Remove(destPath)
+		errResp(w, http.StatusInternalServerError, "failed to update avatar")
+		return
+	}
+
+	updated, _ := h.db.GetUserByID(u.ID)
+	ok(w, updated)
+}
+

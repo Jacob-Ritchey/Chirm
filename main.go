@@ -61,6 +61,7 @@ func main() {
 
 		r.Get("/api/me", h.GetMe)
 		r.Put("/api/me", h.UpdateMe)
+		r.Post("/api/me/avatar", h.UploadAvatar)
 
 		r.Get("/api/channels", h.ListChannels)
 		r.Post("/api/channels", h.CreateChannel)
