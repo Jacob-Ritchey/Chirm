@@ -42,8 +42,8 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { height: 100%; height: -webkit-fill-available; }
-body { height: 100%; height: -webkit-fill-available; overflow: hidden; background: var(--bg-void); color: var(--text-primary); }
+html { height: 100%; }
+body { height: 100%; overflow: hidden; background: var(--bg-void); color: var(--text-primary); }
 
 /* ─── SCROLLBARS ─── */
 ::-webkit-scrollbar { width: 6px; }
@@ -51,22 +51,27 @@ body { height: 100%; height: -webkit-fill-available; overflow: hidden; backgroun
 ::-webkit-scrollbar-thumb { background: var(--bg-active); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-/* ─── APP LAYOUT ─── */
+/* ─── APP LAYOUT — Flexbox, no CSS variable tricks ─── */
 #app {
-  display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr var(--members-w);
-  grid-template-rows: 100%;
+  display: flex;
+  flex-direction: row;
   height: 100%;
-  min-height: -webkit-fill-available;
+  /* svh = small viewport height, accounts for mobile address bar */
+  height: 100svh;
+  overflow: hidden;
 }
 
 /* ─── SIDEBAR ─── */
 #sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
+  /* Ensure it never collapses below its defined width */
+  min-width: var(--sidebar-w);
 }
 
 #server-header {
@@ -164,6 +169,8 @@ body { height: 100%; height: -webkit-fill-available; overflow: hidden; backgroun
 
 /* ─── MAIN CONTENT ─── */
 #main {
+  flex: 1;
+  min-width: 0; /* critical: prevents flex child from overflowing */
   display: flex;
   flex-direction: column;
   background: var(--bg-base);
@@ -350,6 +357,8 @@ body { height: 100%; height: -webkit-fill-available; overflow: hidden; backgroun
 
 /* ─── MEMBERS SIDEBAR ─── */
 #members-sidebar {
+  width: var(--members-w);
+  flex-shrink: 0;
   background: var(--bg-sidebar);
   border-left: 1px solid var(--border);
   overflow-y: auto;
@@ -559,7 +568,7 @@ select option { background: var(--bg-surface); }
 /* ─── LOGIN / SETUP PAGES ─── */
 .auth-page {
   min-height: 100%;
-  min-height: -webkit-fill-available;
+  min-height: 100svh;
   background: var(--bg-void);
   display: flex; align-items: center; justify-content: center;
   padding: 24px;
@@ -652,6 +661,7 @@ pre code { background: none; border: none; padding: 0; }
   background: rgba(0,0,0,0.6);
   z-index: 200;
 }
+#sidebar-overlay.open { display: block; }
 
 /* ─── HAMBURGER BUTTON (mobile only) ─── */
 #hamburger-btn {
@@ -662,36 +672,62 @@ pre code { background: none; border: none; padding: 0; }
   margin-right: 4px;
   transition: color 0.1s, background 0.1s;
   flex-shrink: 0;
+  align-items: center;
 }
 #hamburger-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 
-/* ─── RESPONSIVE ─── */
-@media (max-width: 900px) {
-  :root { --members-w: 0px; }
+/* ─── TABLET: hide members panel ─── */
+@media (max-width: 1024px) {
   #members-sidebar { display: none; }
 }
 
-@media (max-width: 620px) {
-  :root { --sidebar-w: 0px; }
+/* ─── MOBILE: sidebar becomes overlay drawer ─── */
+@media (max-width: 768px) {
+  /* Show hamburger */
+  #hamburger-btn { display: flex; }
 
-  #hamburger-btn { display: flex; align-items: center; }
-
-  /* Sidebar becomes a fixed overlay panel */
+  /* Remove sidebar from flex flow entirely */
   #sidebar {
     position: fixed;
     top: 0; left: 0;
-    width: 260px;
+    /* Use svh with px fallback for older browsers */
     height: 100%;
+    height: 100svh;
+    width: 280px;
+    min-width: 280px;
     z-index: 201;
+    /* Slide off-screen by default */
     transform: translateX(-100%);
-    transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
-    /* Keep display:flex (not none) so animation works */
-    display: flex;
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    /* Override the flex width vars — sidebar is out of flow */
+    flex-shrink: 0;
   }
   #sidebar.open {
     transform: translateX(0);
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.6);
   }
-  #sidebar-overlay.open {
-    display: block;
-  }
+
+  /* Main takes full width since sidebar is out of flow */
+  #main { width: 100%; }
+
+  /* Tighter message input on small screens */
+  #message-input-area { padding: 8px 10px 12px; }
+  #channel-header { padding: 0 12px; }
+  #channel-header .ch-desc { display: none; }
+
+  /* Modals full-width on mobile */
+  .modal { width: 96%; max-width: 96%; border-radius: var(--radius); }
+  .modal-body { padding: 16px; }
+  .modal-header { padding: 14px 16px 12px; }
+  .modal-footer { padding: 12px 16px; }
+
+  /* Admin table scrollable */
+  .data-table { font-size: 12px; }
+  .data-table td, .data-table th { padding: 7px 8px; }
+}
+
+/* ─── SMALL PHONES: tighter spacing ─── */
+@media (max-width: 400px) {
+  .admin-tabs { flex-wrap: wrap; }
+  .admin-tab { font-size: 12px; padding: 6px 10px; }
 }

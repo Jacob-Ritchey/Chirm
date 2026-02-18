@@ -249,7 +249,7 @@ async function openChannel(ch) {
   App.unread.delete(ch.id);
 
   // Close mobile sidebar when channel selected
-  if (window.innerWidth <= 620) toggleSidebar(true);
+  if (window.innerWidth <= 768) toggleSidebar(true);
 
   // Update sidebar
   document.querySelectorAll('.channel-item').forEach(el => {
@@ -1127,6 +1127,22 @@ function toggleSidebar(forceClose = false) {
     overlay.classList.add('open');
   }
 }
+
+// ─── VIEWPORT HEIGHT FIX ──────────────────────────────────────────────────────
+// Sets --app-height to window.innerHeight so mobile browsers that misreport
+// 100svh (including some Android Firefox versions) still get the right value.
+function fixViewportHeight() {
+  const h = window.innerHeight;
+  document.documentElement.style.setProperty('--app-height', h + 'px');
+  // Apply directly to #app as well as a belt-and-suspenders approach
+  const app = document.getElementById('app');
+  if (app) app.style.height = h + 'px';
+}
+window.addEventListener('resize', fixViewportHeight);
+window.addEventListener('orientationchange', () => setTimeout(fixViewportHeight, 150));
+// Run immediately before DOM is fully ready, and again after
+fixViewportHeight();
+document.addEventListener('DOMContentLoaded', fixViewportHeight);
 
 // ─── BOOT ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
