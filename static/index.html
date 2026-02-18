@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nexus</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ─── LEFT SIDEBAR ─── -->
+  <div id="sidebar">
+    <div id="server-header">
+      <span id="server-name">Nexus</span>
+      <span class="chevron">▼</span>
+    </div>
+
+    <div id="channels-list">
+      <!-- Populated by JS -->
+    </div>
+
+    <div id="user-panel">
+      <div id="user-info" class="flex-center gap-8">
+        <!-- Populated by JS -->
+      </div>
+      <div id="user-panel-actions">
+        <button onclick="openProfile()" title="Edit Profile">⚙</button>
+        <button id="admin-btn" onclick="openAdmin()" title="Admin Panel" style="display:none">🛡</button>
+        <button onclick="logout()" title="Logout">⏻</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── MAIN CONTENT ─── -->
+  <div id="main">
+    <div id="channel-header">
+      <span class="ch-hash">#</span>
+      <span id="ch-title" class="ch-title">Select a channel</span>
+      <span id="ch-desc" class="ch-desc"></span>
+      <div id="channel-header-actions">
+        <button title="Members" onclick="document.getElementById('members-sidebar').classList.toggle('hidden')">👥</button>
+      </div>
+    </div>
+
+    <div id="messages-container">
+      <div id="messages-list">
+        <div class="empty-state" style="padding-top:120px">
+          <div class="empty-icon">✦</div>
+          <h3>Welcome to Nexus</h3>
+          <p>Select a channel to start chatting.</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="typing-indicator"></div>
+
+    <!-- Upload preview strip -->
+    <div id="upload-preview" style="display:none;padding:8px 16px 0;align-items:center;gap:10px;background:var(--bg-base)"></div>
+
+    <div id="message-input-area">
+      <form id="message-form">
+        <input type="file" id="file-input" style="display:none" accept="image/*,video/*,audio/*,.pdf,.txt,.zip">
+        <button type="button" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach file">📎</button>
+        <textarea id="message-input" rows="1" placeholder="Select a channel first…"></textarea>
+        <button type="submit" id="send-btn" title="Send message">➤</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ─── MEMBERS SIDEBAR ─── -->
+  <div id="members-sidebar">
+    <div id="members-list">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+
+</div>
+
+<!-- ─── ADMIN MODAL ─── -->
+<div id="admin-modal" class="modal-overlay" style="display:none">
+  <div class="modal" style="max-width:700px;width:95%">
+    <div class="modal-header">
+      <h2>⚙ Server Administration</h2>
+      <button class="modal-close" onclick="closeModal('admin-modal')">✕</button>
+    </div>
+    <div class="modal-body" style="padding-top:0">
+      <div class="admin-tabs">
+        <button class="admin-tab active" data-tab="users" onclick="switchAdminTab('users')">Users</button>
+        <button class="admin-tab" data-tab="roles" onclick="switchAdminTab('roles')">Roles</button>
+        <button class="admin-tab" data-tab="invites" onclick="switchAdminTab('invites')">Invites</button>
+        <button class="admin-tab" data-tab="settings" onclick="switchAdminTab('settings')">Settings</button>
+      </div>
+
+      <div id="admin-pane-users" class="admin-pane active">
+        <div id="admin-users-list">Loading…</div>
+      </div>
+
+      <div id="admin-pane-roles" class="admin-pane">
+        <div id="admin-roles-list">Loading…</div>
+      </div>
+
+      <div id="admin-pane-invites" class="admin-pane">
+        <div id="admin-invites-list">Loading…</div>
+      </div>
+
+      <div id="admin-pane-settings" class="admin-pane">
+        <div id="admin-settings-form">Loading…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── TOAST CONTAINER ─── -->
+<div id="toast-container"></div>
+
+<script src="/js/ws.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

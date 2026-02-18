@@ -1,0 +1,35 @@
+version: '3.9'
+
+services:
+  nexus:
+    build: .
+    image: nexus:latest
+    container_name: nexus
+    restart: unless-stopped
+    ports:
+      - "8080:8080"           # Change left port to expose differently, e.g. "80:8080"
+    volumes:
+      - nexus-data:/data      # Persistent SQLite DB + uploaded files
+    environment:
+      PORT: "8080"
+      DATA_DIR: "/data"
+      JWT_SECRET: "${JWT_SECRET:-change-me-use-a-long-random-string}"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/setup/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  nexus-data:
+    driver: local
+
+# ── Traefik example (optional, for reverse proxy with SSL) ────────────────────
+# Uncomment and configure if using Traefik:
+#
+#   labels:
+#     - "traefik.enable=true"
+#     - "traefik.http.routers.nexus.rule=Host(`chat.yourdomain.com`)"
+#     - "traefik.http.routers.nexus.entrypoints=websecure"
+#     - "traefik.http.routers.nexus.tls.certresolver=letsencrypt"

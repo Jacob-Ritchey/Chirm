@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nexus — Sign In</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="auth-page">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div class="logo-icon">✦</div>
+      <h1 id="server-title">Nexus</h1>
+      <p id="server-subtitle">Your community, self-hosted.</p>
+    </div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-login" onclick="showTab('login')">Sign In</button>
+      <button class="auth-tab" id="tab-register" onclick="showTab('register')">Register</button>
+    </div>
+
+    <div id="error-msg" class="auth-error" style="display:none"></div>
+
+    <!-- LOGIN FORM -->
+    <div id="form-login">
+      <div class="form-group">
+        <label>Username or Email</label>
+        <input type="text" id="login-id" placeholder="username or email" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary w-full" onclick="doLogin()">Sign In</button>
+    </div>
+
+    <!-- REGISTER FORM -->
+    <div id="form-register" style="display:none">
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" id="reg-username" placeholder="Choose a username" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="reg-email" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="reg-pass" placeholder="Minimum 8 characters" autocomplete="new-password">
+      </div>
+      <div class="form-group" id="invite-group" style="display:none">
+        <label>Invite Code <span style="color:var(--danger)">*</span></label>
+        <input type="text" id="reg-invite" placeholder="Enter invite code">
+      </div>
+      <button class="btn btn-primary w-full" onclick="doRegister()">Create Account</button>
+    </div>
+
+    <div class="auth-footer">
+      Self-hosted with <a href="https://github.com" target="_blank">Nexus</a>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+  // Check if redirected from invite
+  const params = new URLSearchParams(location.search);
+  const inviteCode = params.get('invite');
+
+  async function init() {
+    // Already logged in?
+    const me = await fetch('/api/me', { credentials: 'include' }).then(r => r.json()).catch(() => null);
+    if (me?.id) { window.location.href = '/'; return; }
+
+    // Load server name
+    const settings = await fetch('/api/settings').then(r => r.json()).catch(() => ({}));
+    if (settings.server_name) {
+      document.getElementById('server-title').textContent = settings.server_name;
+      document.title = `${settings.server_name} — Sign In`;
+    }
+
+    // Check if registration requires invite
+    if (settings.require_invite === '1') {
+      document.getElementById('invite-group').style.display = 'block';
+    }
+
+    // If invite code in URL, pre-fill and switch to register
+    if (inviteCode) {
+      document.getElementById('reg-invite').value = inviteCode;
+      showTab('register');
+    }
+  }
+
+  function showTab(tab) {
+    document.getElementById('form-login').style.display = tab === 'login' ? 'block' : 'none';
+    document.getElementById('form-register').style.display = tab === 'register' ? 'block' : 'none';
+    document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+    document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+    clearError();
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('error-msg');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  function clearError() {
+    document.getElementById('error-msg').style.display = 'none';
+  }
+
+  function toast(msg, type = 'info') {
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.textContent = msg;
+    document.getElementById('toast-container').appendChild(el);
+    setTimeout(() => el.remove(), 3500);
+  }
+
+  async function doLogin() {
+    clearError();
+    const login = document.getElementById('login-id').value.trim();
+    const password = document.getElementById('login-pass').value;
+    if (!login || !password) { showError('Please fill in all fields.'); return; }
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showError(data.error || 'Login failed'); return; }
+      window.location.href = '/';
+    } catch (e) {
+      showError('Network error. Is the server running?');
+    }
+  }
+
+  async function doRegister() {
+    clearError();
+    const username = document.getElementById('reg-username').value.trim();
+    const email = document.getElementById('reg-email').value.trim();
+    const password = document.getElementById('reg-pass').value;
+    const invite_code = document.getElementById('reg-invite').value.trim();
+
+    if (!username || !email || !password) { showError('Please fill in all fields.'); return; }
+    if (password.length < 8) { showError('Password must be at least 8 characters.'); return; }
+
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, email, password, invite_code }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showError(data.error || 'Registration failed'); return; }
+      window.location.href = '/';
+    } catch (e) {
+      showError('Network error. Is the server running?');
+    }
+  }
+
+  // Enter key support
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const loginForm = document.getElementById('form-login');
+      if (loginForm.style.display !== 'none') doLogin();
+      else doRegister();
+    }
+  });
+
+  init();
+</script>
+</body>
+</html>
