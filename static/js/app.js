@@ -515,11 +515,187 @@ function clearUploadPreview() {
 
 function openImageViewer(src) {
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.style.cursor = 'zoom-out';
-  overlay.innerHTML = `<img src="${src}" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 8px 48px rgba(0,0,0,0.8)">`;
-  overlay.onclick = () => overlay.remove();
+  overlay.id = 'img-viewer';
+  overlay.innerHTML = `
+    <div id="img-viewer-bg"></div>
+    <div id="img-viewer-toolbar">
+      <button id="img-viewer-close" title="Close">✕</button>
+      <a id="img-viewer-download" href="${src}" download title="Download" target="_blank">⬇</a>
+    </div>
+    <div id="img-viewer-stage">
+      <img id="img-viewer-img" src="${src}" draggable="false">
+    </div>
+  `;
   document.body.appendChild(overlay);
+
+  const stage = overlay.querySelector('#img-viewer-stage');
+  const img = overlay.querySelector('#img-viewer-img');
+
+  // ── State ──
+  let scale = 1, minScale = 1, maxScale = 8;
+  let tx = 0, ty = 0;           // translate
+  let startTx = 0, startTy = 0; // translate at gesture start
+  let isDragging = false;
+
+  // Pinch state
+  let lastDist = 0, startScale = 1;
+  let pinchOriginX = 0, pinchOriginY = 0;
+
+  function clampTranslate(x, y, s) {
+    const iw = img.naturalWidth  * s;
+    const ih = img.naturalHeight * s;
+    const sw = stage.clientWidth;
+    const sh = stage.clientHeight;
+    const maxX = Math.max(0, (iw - sw) / 2);
+    const maxY = Math.max(0, (ih - sh) / 2);
+    return [
+      Math.min(maxX, Math.max(-maxX, x)),
+      Math.min(maxY, Math.max(-maxY, y)),
+    ];
+  }
+
+  function applyTransform(s, x, y) {
+    scale = Math.min(maxScale, Math.max(minScale, s));
+    [tx, ty] = clampTranslate(x, y, scale);
+    img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+  }
+
+  function dist(t) {
+    const dx = t[0].clientX - t[1].clientX;
+    const dy = t[0].clientY - t[1].clientY;
+    return Math.hypot(dx, dy);
+  }
+
+  function midpoint(t) {
+    return {
+      x: (t[0].clientX + t[1].clientX) / 2,
+      y: (t[0].clientY + t[1].clientY) / 2,
+    };
+  }
+
+  // ── Touch handlers ──
+  stage.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      lastDist = dist(e.touches);
+      startScale = scale;
+      const mid = midpoint(e.touches);
+      const rect = stage.getBoundingClientRect();
+      // Pinch origin relative to image center
+      pinchOriginX = mid.x - rect.left - rect.width / 2 - tx;
+      pinchOriginY = mid.y - rect.top  - rect.height / 2 - ty;
+      startTx = tx; startTy = ty;
+    } else if (e.touches.length === 1) {
+      isDragging = true;
+      startTx = tx - e.touches[0].clientX;
+      startTy = ty - e.touches[0].clientY;
+    }
+  }, { passive: false });
+
+  stage.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (e.touches.length === 2) {
+      const newDist = dist(e.touches);
+      const newScale = startScale * (newDist / lastDist);
+      // Keep pinch origin fixed while scaling
+      const scaleRatio = newScale / startScale;
+      const newTx = startTx - pinchOriginX * (scaleRatio - 1);
+      const newTy = startTy - pinchOriginY * (scaleRatio - 1);
+      applyTransform(newScale, newTx, newTy);
+    } else if (e.touches.length === 1 && isDragging) {
+      applyTransform(scale,
+        e.touches[0].clientX + startTx,
+        e.touches[0].clientY + startTy
+      );
+    }
+  }, { passive: false });
+
+  stage.addEventListener('touchend', (e) => {
+    if (e.touches.length < 2) isDragging = false;
+    // Snap back if zoomed out below 1
+    if (scale <= 1.05) applyTransform(1, 0, 0);
+  });
+
+  // Double-tap to toggle zoom
+  let lastTap = 0;
+  stage.addEventListener('touchend', (e) => {
+    if (e.touches.length > 0) return;
+    const now = Date.now();
+    if (now - lastTap < 280) {
+      if (scale > 1.5) {
+        applyTransform(1, 0, 0);
+      } else {
+        const touch = e.changedTouches[0];
+        const rect = stage.getBoundingClientRect();
+        const ox = touch.clientX - rect.left - rect.width / 2;
+        const oy = touch.clientY - rect.top  - rect.height / 2;
+        applyTransform(3, -ox, -oy);
+      }
+    }
+    lastTap = now;
+  });
+
+  // ── Mouse wheel zoom (desktop) ──
+  stage.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = stage.getBoundingClientRect();
+    const ox = e.clientX - rect.left - rect.width / 2 - tx;
+    const oy = e.clientY - rect.top  - rect.height / 2 - ty;
+    const delta = e.deltaY < 0 ? 1.15 : 0.87;
+    const newScale = scale * delta;
+    const scaleRatio = newScale / scale;
+    applyTransform(newScale, tx - ox * (scaleRatio - 1), ty - oy * (scaleRatio - 1));
+  }, { passive: false });
+
+  // ── Mouse drag (desktop) ──
+  stage.addEventListener('mousedown', (e) => {
+    if (scale <= 1) return;
+    isDragging = true;
+    startTx = tx - e.clientX;
+    startTy = ty - e.clientY;
+    stage.style.cursor = 'grabbing';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    applyTransform(scale, e.clientX + startTx, e.clientY + startTy);
+  });
+  window.addEventListener('mouseup', () => {
+    isDragging = false;
+    stage.style.cursor = scale > 1 ? 'grab' : 'zoom-out';
+  });
+
+  // ── Close ──
+  overlay.querySelector('#img-viewer-close').onclick = closeViewer;
+  overlay.querySelector('#img-viewer-bg').onclick = closeViewer;
+  document.addEventListener('keydown', keyClose);
+
+  function keyClose(e) {
+    if (e.key === 'Escape') closeViewer();
+  }
+  function closeViewer() {
+    overlay.remove();
+    document.removeEventListener('keydown', keyClose);
+    // Restore browser zoom
+    const vp = document.querySelector('meta[name=viewport]');
+    if (vp) vp.content = 'width=device-width, initial-scale=1.0';
+  }
+
+  // Disable browser pinch-zoom while viewer is open
+  const vp = document.querySelector('meta[name=viewport]');
+  if (vp) vp.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+
+  // Update cursor hint based on scale
+  stage.style.cursor = 'zoom-in';
+  img.addEventListener('load', () => {
+    // Auto-set minScale so image fills stage without letterboxing beyond natural size
+    const sw = stage.clientWidth, sh = stage.clientHeight;
+    const fit = Math.min(sw / img.naturalWidth, sh / img.naturalHeight, 1);
+    minScale = fit;
+    scale = fit < 1 ? fit : 1;
+    applyTransform(scale, 0, 0);
+    stage.style.cursor = 'zoom-in';
+  });
 }
 
 // ─── WEBSOCKET HANDLERS ───────────────────────────────────────────────────────
@@ -1125,6 +1301,31 @@ function toggleSidebar(forceClose = false) {
   } else {
     sidebar.classList.add('open');
     overlay.classList.add('open');
+  }
+}
+
+function toggleMembers() {
+  const panel = document.getElementById('members-sidebar');
+  const isMobile = window.innerWidth <= 1024;
+
+  if (isMobile) {
+    // On tablet/mobile: slide in as overlay panel
+    const isOpen = panel.classList.contains('overlay-open');
+    panel.classList.toggle('overlay-open', !isOpen);
+
+    // Tap-outside to close — reuse sidebar overlay element
+    const overlay = document.getElementById('sidebar-overlay');
+    if (!isOpen) {
+      overlay.classList.add('open');
+      // Temporarily redirect overlay click to close members
+      overlay._memberClose = () => { toggleMembers(); };
+      overlay.addEventListener('click', overlay._memberClose, { once: true });
+    } else {
+      overlay.classList.remove('open');
+    }
+  } else {
+    // On desktop: collapse/expand in-place with smooth CSS transition
+    panel.classList.toggle('collapsed');
   }
 }
 
