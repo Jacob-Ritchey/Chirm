@@ -78,5 +78,5 @@ const WS = (() => {
     (handlers[type] || []).forEach(h => h(data));
   }
 
-  return { connect, subscribe, sendTyping, on, off };
+  return { connect, subscribe, sendTyping, send, on, off };
 })();

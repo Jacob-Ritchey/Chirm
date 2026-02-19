@@ -835,3 +835,233 @@ pre code { background: none; border: none; padding: 0; }
   .admin-tabs { flex-wrap: wrap; }
   .admin-tab { font-size: 12px; padding: 6px 10px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VOICE ROOMS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Voice panel: takes over the main content area ─── */
+#voice-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+/* ─── Participant grid ─── */
+#voice-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  padding: 20px;
+  overflow-y: auto;
+  align-content: start;
+}
+
+/* Single participant: full-width centred */
+#voice-grid:has(.vc-tile:only-child) {
+  grid-template-columns: minmax(0, 480px);
+  justify-content: center;
+  align-content: center;
+}
+
+/* ─── Participant tile ─── */
+.vc-tile {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 4 / 3;
+  position: relative;
+  transition: border-color 0.2s;
+}
+
+.vc-tile:hover {
+  border-color: var(--border-strong);
+}
+
+.vc-video-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  position: relative;
+  overflow: hidden;
+}
+
+.vc-video-wrap video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.vc-avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: -1px;
+  user-select: none;
+}
+
+.vc-name {
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Controls bar ─── */
+#voice-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px 20px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.vc-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 22px;
+  transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.vc-btn:hover {
+  background: var(--bg-hover);
+  transform: scale(1.08);
+}
+
+.vc-btn:active {
+  transform: scale(0.95);
+}
+
+.vc-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+  box-shadow: 0 0 0 2px var(--accent), 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.vc-btn.muted {
+  background: rgba(224, 82, 82, 0.18);
+  color: var(--danger);
+  box-shadow: 0 0 0 2px var(--danger), 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.vc-btn.vc-leave {
+  background: rgba(224, 82, 82, 0.15);
+  color: var(--danger);
+}
+
+.vc-btn.vc-leave:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ─── Channel list: voice channel appearance ─── */
+.channel-item .ch-icon {
+  font-size: 14px;
+  min-width: 16px;
+  text-align: center;
+}
+
+.channel-item.voice-active {
+  background: rgba(63, 186, 122, 0.12);
+  color: var(--success);
+}
+
+.channel-item.voice-active .ch-name {
+  color: var(--success);
+}
+
+.voice-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  border-radius: 9px;
+  padding: 1px 6px;
+  min-width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* ─── Participant list below voice channel ─── */
+.voice-participants-list {
+  padding: 2px 0 6px 28px;
+}
+
+.voice-participant-row {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vp-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--online);
+  flex-shrink: 0;
+}
+
+/* ─── Responsive voice grid ─── */
+@media (max-width: 768px) {
+  #voice-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .vc-btn {
+    width: 46px;
+    height: 46px;
+    font-size: 19px;
+  }
+
+  .vc-avatar {
+    width: 52px;
+    height: 52px;
+    font-size: 22px;
+  }
+}
+
+@media (max-width: 400px) {
+  #voice-grid {
+    grid-template-columns: 1fr;
+  }
+}

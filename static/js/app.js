@@ -10,6 +10,7 @@ const App = {
   roles: [],
   unread: new Set(),
   typingUsers: {},       // channelId → {userId: timestamp}
+  voiceParticipants: {},  // channelId → Set of userIds
   token: null,
 };
 
@@ -123,10 +124,12 @@ async function init() {
   // Connect WebSocket
   WS.connect();
   setupWSHandlers();
+  Voice.init();
 
-  // Open first channel
-  if (App.channels.length > 0) {
-    openChannel(App.channels[0]);
+  // Open first text channel
+  const firstText = App.channels.find(c => c.type !== 'voice') || App.channels[0];
+  if (firstText) {
+    openChannel(firstText);
   }
 
   // Admin panel button
@@ -173,18 +176,43 @@ function renderChannelList() {
   list.appendChild(header);
 
   for (const ch of App.channels) {
+    const isVoice = ch.type === 'voice';
+    const participants = isVoice ? (App.voiceParticipants[ch.id] || new Set()) : null;
+    const pCount = participants ? participants.size : 0;
+    const inRoom = isVoice && Voice.isInChannel(ch.id);
+
     const item = document.createElement('div');
-    item.className = `channel-item${App.currentChannel?.id === ch.id ? ' active' : ''}${App.unread.has(ch.id) && App.currentChannel?.id !== ch.id ? ' unread' : ''}`;
+    item.className = `channel-item${App.currentChannel?.id === ch.id && !isVoice ? ' active' : ''}${inRoom ? ' voice-active' : ''}${App.unread.has(ch.id) && App.currentChannel?.id !== ch.id ? ' unread' : ''}`;
     item.dataset.channelId = ch.id;
+
+    const icon = isVoice ? '🔊' : '#';
+    const badge = isVoice && pCount > 0 ? `<span class="voice-count">${pCount}</span>` : '';
+
     item.innerHTML = `
-      <span class="ch-icon">#</span>
+      <span class="ch-icon">${icon}</span>
       <span class="ch-name">${esc(ch.name)}</span>
+      ${badge}
       <span class="unread-dot"></span>
       ${isAdmin(App.user) ? `<span class="channel-edit-actions">
         <button class="channel-edit-btn" onclick="event.stopPropagation();openEditChannel('${ch.id}')" title="Edit">✎</button>
         <button class="channel-edit-btn" onclick="event.stopPropagation();confirmDeleteChannel('${ch.id}')" title="Delete" style="color:var(--danger)">✕</button>
       </span>` : ''}
     `;
+
+    if (isVoice && pCount > 0) {
+      // Show participant names below the channel item
+      const memberNames = [...participants].map(uid => {
+        const m = App.members.find(m => m.id === uid);
+        return m ? esc(m.username) : uid.slice(0,8);
+      });
+      const sub = document.createElement('div');
+      sub.className = 'voice-participants-list';
+      sub.innerHTML = memberNames.map(n =>
+        `<div class="voice-participant-row"><span class="vp-dot"></span>${n}</div>`
+      ).join('');
+      item.appendChild(sub);
+    }
+
     item.addEventListener('click', () => openChannel(ch));
     list.appendChild(item);
   }
@@ -244,6 +272,35 @@ function renderMembersList() {
 
 // ─── CHANNELS ─────────────────────────────────────────────────────────────────
 async function openChannel(ch) {
+  // ── Voice channel: join/toggle voice room ──────────────────────────────
+  if (ch.type === 'voice') {
+    if (Voice.isInChannel(ch.id)) {
+      // Already in this room, leave
+      await Voice.leave();
+    } else {
+      // Show voice panel, hide text UI
+      document.getElementById('messages-container').style.display = 'none';
+      document.getElementById('message-input-area').style.display = 'none';
+      document.getElementById('typing-indicator').style.display = 'none';
+
+      // Update header
+      document.getElementById('ch-title').textContent = ch.name;
+      document.getElementById('ch-desc').textContent = ch.description || 'Voice Channel';
+      document.querySelector('.ch-hash').textContent = '🔊';
+
+      await Voice.join(ch.id);
+    }
+    renderChannelList();
+    return;
+  }
+
+  // ── Text channel ───────────────────────────────────────────────────────
+  // Restore text UI if we were in a voice panel
+  document.getElementById('messages-container').style.display = '';
+  document.getElementById('message-input-area').style.display = '';
+  document.getElementById('typing-indicator').style.display = '';
+  document.querySelector('.ch-hash').textContent = '#';
+
   App.currentChannel = ch;
   App.unread.delete(ch.id);
 
@@ -815,6 +872,23 @@ function setupWSHandlers() {
       }
     }, 4000);
   });
+
+  // ── Voice participant tracking (for sidebar counts) ──────────────────────
+  WS.on('voice.joined', ({ channel_id, user_id }) => {
+    if (!App.voiceParticipants[channel_id]) App.voiceParticipants[channel_id] = new Set();
+    App.voiceParticipants[channel_id].add(user_id);
+    renderChannelList();
+  });
+
+  WS.on('voice.left', ({ channel_id, user_id }) => {
+    if (App.voiceParticipants[channel_id]) {
+      App.voiceParticipants[channel_id].delete(user_id);
+      if (App.voiceParticipants[channel_id].size === 0) {
+        delete App.voiceParticipants[channel_id];
+      }
+    }
+    renderChannelList();
+  });
 }
 
 let typingTimeout = null;
@@ -1047,11 +1121,19 @@ function openCreateChannel() {
   const form = `
     <div class="form-group"><label>Channel Name</label><input type="text" id="new-ch-name" placeholder="new-channel"></div>
     <div class="form-group"><label>Description</label><input type="text" id="new-ch-desc" placeholder="Optional description"></div>
+    <div class="form-group">
+      <label>Channel Type</label>
+      <select id="new-ch-type" style="width:100%;padding:8px 10px;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:14px">
+        <option value="text">💬 Text Channel</option>
+        <option value="voice">🔊 Voice Channel</option>
+      </select>
+    </div>
   `;
   showSimpleModal('Create Channel', form, async () => {
     const name = document.getElementById('new-ch-name').value.trim();
     if (!name) { toast('Name required', 'error'); return false; }
-    await api.post('/api/channels', { name, description: document.getElementById('new-ch-desc').value });
+    const type = document.getElementById('new-ch-type').value;
+    await api.post('/api/channels', { name, description: document.getElementById('new-ch-desc').value, type });
     await loadChannels();
     renderChannelList();
   });
