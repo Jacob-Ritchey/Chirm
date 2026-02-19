@@ -363,6 +363,25 @@ func (c *Client) handleMessage(evt rawClientMessage) {
 				"payload":      d.Payload,
 			},
 		})
+
+	// Broadcast camera/mic state to everyone else in the room so they can
+	// show/hide the video tile vs avatar without relying on track detection.
+	case "voice.media_state":
+		var d struct {
+			ChannelID  string `json:"channel_id"`
+			CamEnabled bool   `json:"cam_enabled"`
+		}
+		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
+			return
+		}
+		c.hub.BroadcastToVoiceRoom(d.ChannelID, WSEvent{
+			Type: "voice.media_state",
+			Data: map[string]interface{}{
+				"channel_id":   d.ChannelID,
+				"from_user_id": c.userID,
+				"cam_enabled":  d.CamEnabled,
+			},
+		}, c)
 	}
 }
 

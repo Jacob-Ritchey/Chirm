@@ -285,7 +285,7 @@ async function openChannel(ch) {
   // ── Voice channel: join/toggle voice room ──────────────────────────────
   if (ch.type === 'voice') {
     if (Voice.isInChannel(ch.id)) {
-      // Already in this room, leave
+      // Already in this room — leave
       await Voice.leave();
     } else {
       // Show voice panel, hide text UI
@@ -298,7 +298,16 @@ async function openChannel(ch) {
       document.getElementById('ch-desc').textContent = ch.description || 'Voice Channel';
       document.querySelector('.ch-hash').textContent = '🔊';
 
-      await Voice.join(ch.id);
+      const joined = await Voice.join(ch.id);
+
+      if (joined) {
+        // Optimistically add self to participant list immediately so the
+        // sidebar shows the current user without waiting for the WS round-trip.
+        // (Especially important on mobile where the sidebar may be re-opened
+        // before the voice.joined event arrives.)
+        if (!App.voiceParticipants[ch.id]) App.voiceParticipants[ch.id] = new Set();
+        App.voiceParticipants[ch.id].add(App.user.id);
+      }
     }
     renderChannelList();
     return;
