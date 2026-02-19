@@ -8,8 +8,9 @@ const Voice = (() => {
   let localStream = null;
   let micEnabled = true;
   let camEnabled = false;
+  let videoTrackAvailable = false; // did the user grant camera permission?
 
-  // peers: userId → { pc: RTCPeerConnection, stream: MediaStream|null }
+  // peers: userId → { pc: RTCPeerConnection }
   const peers = {};
 
   const ICE_SERVERS = [
@@ -17,20 +18,54 @@ const Voice = (() => {
     { urls: 'stun:stun1.l.google.com:19302' },
   ];
 
+  // ── Secure context check ──────────────────────────────────────────────────
+  // getUserMedia requires HTTPS on non-localhost origins (all mobile browsers,
+  // Chrome on LAN, Firefox on LAN). Detect this early and give a clear message.
+  function checkSecureContext() {
+    if (window.isSecureContext) return true;
+    const host = location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+    // Not secure and not localhost — media APIs will be blocked
+    const httpsUrl = 'https://' + location.hostname + ':8443' + location.pathname;
+    toast(
+      '🔒 Voice requires HTTPS on this network. ' +
+      'Open ' + httpsUrl + ' (accept the self-signed cert warning), then try again.',
+      'error'
+    );
+    return false;
+  }
+
   // ── Public API ────────────────────────────────────────────────────────────
 
   async function join(channelId) {
     if (currentChannelId) await leave();
 
+    if (!checkSecureContext()) return false;
+
     currentChannelId = channelId;
 
-    // Get local media (audio only by default; camera opt-in)
+    // Request audio + video together so the browser shows one combined prompt.
+    // If video is denied we gracefully fall back to audio-only.
+    // If audio itself is denied, we abort entirely.
+    videoTrackAvailable = false;
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    } catch (err) {
-      toast('Microphone access denied', 'error');
-      currentChannelId = null;
-      return false;
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      videoTrackAvailable = true;
+      // Start with video muted — user must explicitly enable it
+      localStream.getVideoTracks().forEach(t => { t.enabled = false; });
+    } catch (avErr) {
+      // Video denied or no camera — try audio only
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        videoTrackAvailable = false;
+      } catch (aErr) {
+        const msg = aErr.name === 'NotAllowedError'
+          ? 'Microphone access denied. Please allow microphone in browser/system settings.'
+          : 'Could not access microphone: ' + aErr.message;
+        toast(msg, 'error');
+        currentChannelId = null;
+        return false;
+      }
     }
 
     micEnabled = true;
@@ -62,6 +97,9 @@ const Voice = (() => {
       localStream = null;
     }
 
+    videoTrackAvailable = false;
+    camEnabled = false;
+
     hideVoiceUI();
   }
 
@@ -72,37 +110,27 @@ const Voice = (() => {
     updateVoiceControls();
   }
 
-  async function toggleCam() {
+  function toggleCam() {
     if (!localStream) return;
 
+    if (!videoTrackAvailable) {
+      toast('Camera not available — it was denied when joining. Rejoin to grant camera access.', 'error');
+      return;
+    }
+
+    camEnabled = !camEnabled;
+    localStream.getVideoTracks().forEach(t => { t.enabled = camEnabled; });
+
+    // If we're now showing video, make sure it's flowing to existing peers
     if (camEnabled) {
-      // Turn camera off
-      localStream.getVideoTracks().forEach(t => { t.stop(); localStream.removeTrack(t); });
-      camEnabled = false;
-      // Replace video track with null in all peers
-      for (const uid of Object.keys(peers)) {
-        const sender = peers[uid].pc.getSenders().find(s => s.track && s.track.kind === 'video');
-        if (sender) sender.replaceTrack(null);
-      }
-    } else {
-      // Turn camera on
-      try {
-        const camStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        const videoTrack = camStream.getVideoTracks()[0];
-        localStream.addTrack(videoTrack);
-        camEnabled = true;
-        // Add/replace video track in all peers
+      const videoTrack = localStream.getVideoTracks()[0];
+      if (videoTrack) {
         for (const uid of Object.keys(peers)) {
-          const sender = peers[uid].pc.getSenders().find(s => s.track && s.track.kind === 'video');
+          const sender = peers[uid].pc.getSenders().find(s => s.track?.kind === 'video');
           if (sender) {
-            sender.replaceTrack(videoTrack);
-          } else {
-            peers[uid].pc.addTrack(videoTrack, localStream);
+            sender.replaceTrack(videoTrack).catch(() => {});
           }
         }
-      } catch {
-        toast('Camera access denied', 'error');
-        return;
       }
     }
 
@@ -116,20 +144,18 @@ const Voice = (() => {
   function onRoomState(data) {
     if (data.channel_id !== currentChannelId) return;
     const participants = data.participants || [];
-    // Initiate a connection to each existing participant
     for (const uid of participants) {
       if (uid !== App.user.id) {
-        createPeer(uid, true); // polite=true means we make the offer
+        createPeer(uid, true); // we are the offerer
       }
     }
   }
 
-  // A new user joined the room
+  // A new user joined the room after us
   function onUserJoined(data) {
     if (data.channel_id !== currentChannelId) return;
     if (data.user_id === App.user.id) return;
-    // They will initiate an offer to us, so we don't initiate
-    createPeer(data.user_id, false);
+    createPeer(data.user_id, false); // they will send us an offer
   }
 
   // A user left the room
@@ -145,14 +171,18 @@ const Voice = (() => {
     const uid = data.from_user_id;
     if (!peers[uid]) createPeer(uid, false);
     const pc = peers[uid].pc;
-    await pc.setRemoteDescription(new RTCSessionDescription(data.payload));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    WS.send('voice.answer', {
-      channel_id: currentChannelId,
-      target_user_id: uid,
-      payload: pc.localDescription,
-    });
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(data.payload));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      WS.send('voice.answer', {
+        channel_id: currentChannelId,
+        target_user_id: uid,
+        payload: pc.localDescription,
+      });
+    } catch (e) {
+      console.warn('voice offer error:', e);
+    }
   }
 
   // Incoming WebRTC answer
@@ -160,7 +190,11 @@ const Voice = (() => {
     if (data.channel_id !== currentChannelId) return;
     const pc = peers[data.from_user_id]?.pc;
     if (!pc) return;
-    await pc.setRemoteDescription(new RTCSessionDescription(data.payload));
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(data.payload));
+    } catch (e) {
+      console.warn('voice answer error:', e);
+    }
   }
 
   // Incoming ICE candidate
@@ -179,9 +213,9 @@ const Voice = (() => {
     if (peers[uid]) return peers[uid];
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    peers[uid] = { pc, stream: null };
+    peers[uid] = { pc };
 
-    // Add our local tracks to the connection
+    // Add our local tracks
     if (localStream) {
       localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
     }
@@ -197,7 +231,6 @@ const Voice = (() => {
     };
 
     pc.ontrack = (e) => {
-      peers[uid].stream = e.streams[0];
       upsertPeerTile(uid, e.streams[0]);
     };
 
@@ -209,7 +242,6 @@ const Voice = (() => {
     };
 
     if (initiator) {
-      // Negotiation-needed fires after tracks are added
       pc.onnegotiationneeded = async () => {
         try {
           const offer = await pc.createOffer();
@@ -219,7 +251,9 @@ const Voice = (() => {
             target_user_id: uid,
             payload: pc.localDescription,
           });
-        } catch {}
+        } catch (e) {
+          console.warn('voice offer create error:', e);
+        }
       };
     }
 
@@ -235,17 +269,22 @@ const Voice = (() => {
   // ── UI ────────────────────────────────────────────────────────────────────
 
   function renderVoiceUI() {
-    let panel = document.getElementById('voice-panel');
+    const panel = document.getElementById('voice-panel');
     if (!panel) return;
     panel.style.display = 'flex';
+
+    const camIcon = videoTrackAvailable ? '📷' : '🚫';
+    const camTitle = videoTrackAvailable ? 'Toggle Camera' : 'Camera unavailable (denied on join)';
+
     panel.innerHTML = `
       <div id="voice-grid"></div>
       <div id="voice-controls">
         <button id="vc-mic" class="vc-btn active" onclick="Voice.toggleMic()" title="Toggle Mic">
           <span class="vc-icon">🎙</span>
         </button>
-        <button id="vc-cam" class="vc-btn" onclick="Voice.toggleCam()" title="Toggle Camera">
-          <span class="vc-icon">📷</span>
+        <button id="vc-cam" class="vc-btn${!videoTrackAvailable ? ' vc-disabled' : ''}"
+          onclick="Voice.toggleCam()" title="${camTitle}">
+          <span class="vc-icon">${camIcon}</span>
         </button>
         <button id="vc-leave" class="vc-btn vc-leave" onclick="Voice.leave()" title="Leave Voice">
           <span class="vc-icon">📵</span>
@@ -253,7 +292,6 @@ const Voice = (() => {
       </div>
     `;
 
-    // Add local tile
     upsertLocalTile();
     updateVoiceControls();
   }
@@ -264,28 +302,33 @@ const Voice = (() => {
       panel.style.display = 'none';
       panel.innerHTML = '';
     }
-    // Show text chat UI back
     document.getElementById('messages-container').style.display = '';
     document.getElementById('message-input-area').style.display = '';
     document.getElementById('typing-indicator').style.display = '';
-    // Update sidebar channel highlight
     if (typeof renderChannelList === 'function') renderChannelList();
   }
 
   function attachLocalVideo() {
     const tile = document.getElementById('voice-tile-local');
-    if (!tile) return;
+    if (!tile || !localStream) return;
+
+    const wrap = tile.querySelector('.vc-video-wrap');
     let vid = tile.querySelector('video');
-    if (!vid) {
+    if (!vid && videoTrackAvailable) {
       vid = document.createElement('video');
       vid.autoplay = true;
-      vid.muted = true; // always mute local to prevent echo
+      vid.muted = true; // always mute self to prevent echo
       vid.playsInline = true;
-      tile.querySelector('.vc-video-wrap').appendChild(vid);
+      wrap.appendChild(vid);
     }
-    vid.srcObject = localStream;
-    // Show/hide video based on cam state
-    vid.style.display = camEnabled ? 'block' : 'none';
+    if (vid) {
+      vid.srcObject = localStream;
+      vid.style.display = camEnabled ? 'block' : 'none';
+    }
+
+    // Avatar visibility (inverse of video)
+    const av = wrap.querySelector('.vc-avatar');
+    if (av) av.style.display = camEnabled ? 'none' : 'flex';
   }
 
   function upsertLocalTile() {
@@ -305,22 +348,30 @@ const Voice = (() => {
 
     let tile = document.getElementById(`voice-tile-${uid}`);
     if (!tile) {
-      const member = App.members.find(m => m.id === uid) || { id: uid, username: uid.slice(0,8) };
+      const member = App.members.find(m => m.id === uid) || { id: uid, username: uid.slice(0, 8) };
       tile = makeTile(uid, member);
       grid.appendChild(tile);
     }
 
+    const wrap = tile.querySelector('.vc-video-wrap');
     let vid = tile.querySelector('video');
     if (!vid) {
       vid = document.createElement('video');
       vid.autoplay = true;
       vid.playsInline = true;
-      tile.querySelector('.vc-video-wrap').appendChild(vid);
+      wrap.appendChild(vid);
     }
     vid.srcObject = stream;
 
-    const hasVideo = stream.getVideoTracks().some(t => t.enabled);
-    vid.style.display = hasVideo ? 'block' : 'none';
+    // Show video when a video track is active, otherwise show avatar
+    const av = wrap.querySelector('.vc-avatar');
+    stream.onaddtrack = stream.onremovetrack = updateTileVideo;
+    function updateTileVideo() {
+      const hasVideo = stream.getVideoTracks().some(t => t.enabled && t.readyState === 'live');
+      vid.style.display = hasVideo ? 'block' : 'none';
+      if (av) av.style.display = hasVideo ? 'none' : 'flex';
+    }
+    updateTileVideo();
   }
 
   function removePeerTile(uid) {
@@ -335,7 +386,7 @@ const Voice = (() => {
 
     const name = user?.username || '?';
     const initial = name[0].toUpperCase();
-    const colors = ['#6c63ff','#3fba7a','#e05252','#e0a030','#3fa0e0','#a052e0','#e05290'];
+    const colors = ['#6c63ff', '#3fba7a', '#e05252', '#e0a030', '#3fa0e0', '#a052e0', '#e05290'];
     let hash = 0;
     for (const c of name) hash = c.charCodeAt(0) + ((hash << 5) - hash);
     const color = colors[Math.abs(hash) % colors.length];
@@ -352,35 +403,42 @@ const Voice = (() => {
   function updateVoiceControls() {
     const micBtn = document.getElementById('vc-mic');
     const camBtn = document.getElementById('vc-cam');
+
     if (micBtn) {
       micBtn.classList.toggle('active', micEnabled);
       micBtn.classList.toggle('muted', !micEnabled);
       micBtn.title = micEnabled ? 'Mute Mic' : 'Unmute Mic';
       micBtn.querySelector('.vc-icon').textContent = micEnabled ? '🎙' : '🔇';
     }
-    if (camBtn) {
-      camBtn.classList.toggle('active', camEnabled);
-      camBtn.title = camEnabled ? 'Turn Off Camera' : 'Turn On Camera';
-      camBtn.querySelector('.vc-icon').textContent = camEnabled ? '📷' : '🚫';
-    }
 
-    // Also update local tile to show/hide video
-    attachLocalVideo();
+    if (camBtn) {
+      if (videoTrackAvailable) {
+        camBtn.classList.toggle('active', camEnabled);
+        camBtn.classList.remove('vc-disabled');
+        camBtn.title = camEnabled ? 'Turn Off Camera' : 'Turn On Camera';
+        camBtn.querySelector('.vc-icon').textContent = camEnabled ? '📷' : '📷';
+      } else {
+        camBtn.classList.remove('active');
+        camBtn.classList.add('vc-disabled');
+        camBtn.title = 'Camera unavailable — denied on join';
+        camBtn.querySelector('.vc-icon').textContent = '🚫';
+      }
+    }
   }
 
   function esc(s) {
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   // ── Register WS handlers ──────────────────────────────────────────────────
 
   function init() {
     WS.on('voice.room_state', onRoomState);
-    WS.on('voice.joined',     onUserJoined);
-    WS.on('voice.left',       onUserLeft);
-    WS.on('voice.offer',      onOffer);
-    WS.on('voice.answer',     onAnswer);
-    WS.on('voice.ice',        onIce);
+    WS.on('voice.joined', onUserJoined);
+    WS.on('voice.left', onUserLeft);
+    WS.on('voice.offer', onOffer);
+    WS.on('voice.answer', onAnswer);
+    WS.on('voice.ice', onIce);
   }
 
   function isInChannel(channelId) {

@@ -62,7 +62,6 @@ func (h *Hub) Run() {
 				close(client.send)
 			}
 			h.mu.Unlock()
-			// Clean up voice rooms on disconnect
 			h.leaveAllVoiceRooms(client)
 
 		case message := <-h.broadcast:
@@ -211,6 +210,21 @@ func (h *Hub) leaveAllVoiceRooms(client *Client) {
 		h.BroadcastToVoiceRoom(channelID, evt, nil)
 		h.Broadcast(evt)
 	}
+}
+
+// GetVoiceRoomSnapshot returns a map of channelID → []userID for all active rooms
+func (h *Hub) GetVoiceRoomSnapshot() map[string][]string {
+	h.voiceRoomsMu.RLock()
+	defer h.voiceRoomsMu.RUnlock()
+	out := make(map[string][]string)
+	for channelID, room := range h.voiceRooms {
+		uids := make([]string, 0, len(room))
+		for c := range room {
+			uids = append(uids, c.userID)
+		}
+		out[channelID] = uids
+	}
+	return out
 }
 
 func (c *Client) SetChannel(channelID string) {

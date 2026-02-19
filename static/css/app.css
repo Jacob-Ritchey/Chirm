@@ -1065,3 +1065,20 @@ pre code { background: none; border: none; padding: 0; }
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Disabled voice control button ── */
+.vc-btn.vc-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: var(--bg-surface);
+  box-shadow: none;
+}
+.vc-btn.vc-disabled:hover {
+  transform: none;
+  background: var(--bg-surface);
+}
+
+/* ── Avatar in tile: flex so it centres properly ── */
+.vc-avatar {
+  display: flex;
+}

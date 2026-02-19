@@ -113,7 +113,7 @@ async function init() {
   }
 
   // Load data
-  await Promise.all([loadChannels(), loadMembers(), loadRoles()]);
+  await Promise.all([loadChannels(), loadMembers(), loadRoles(), loadVoiceRooms()]);
 
   // Render UI
   renderServerHeader();
@@ -149,6 +149,16 @@ async function loadMembers() {
 
 async function loadRoles() {
   App.roles = await api.get('/api/roles').catch(() => []);
+}
+
+async function loadVoiceRooms() {
+  const data = await api.get('/api/voice/rooms').catch(() => null);
+  if (!data || !data.rooms) return;
+  // Populate App.voiceParticipants from the server snapshot
+  App.voiceParticipants = {};
+  for (const [channelId, userIds] of Object.entries(data.rooms)) {
+    App.voiceParticipants[channelId] = new Set(userIds);
+  }
 }
 
 async function loadMessages(channelId, before = null) {

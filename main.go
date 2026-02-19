@@ -1,11 +1,21 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"embed"
+	"encoding/pem"
 	"io/fs"
 	"log"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -94,6 +104,8 @@ func main() {
 		r.Put("/api/settings", h.UpdateSettings)
 
 		r.Get("/api/members", h.ListMembers)
+
+		r.Get("/api/voice/rooms", h.VoiceRooms)
 	})
 
 	// Uploaded files
@@ -121,8 +133,76 @@ func main() {
 		}
 	})
 
+	// Start HTTPS with auto-generated self-signed cert (required for getUserMedia on LAN)
+	httpsPort := getEnv("HTTPS_PORT", "8443")
+	tlsCert, tlsErr := generateSelfSignedCert()
+	if tlsErr != nil {
+		log.Printf("⚠ Could not generate TLS cert: %v — voice will only work on localhost", tlsErr)
+	} else {
+		go func() {
+			tlsServer := &http.Server{
+				Addr:    ":" + httpsPort,
+				Handler: r,
+				TLSConfig: &tls.Config{
+					Certificates: []tls.Certificate{tlsCert},
+				},
+			}
+			log.Printf("✦ Nexus HTTPS (voice-ready) at https://localhost:%s", httpsPort)
+			if err := tlsServer.ListenAndServeTLS("", ""); err != nil {
+				log.Printf("HTTPS server error: %v", err)
+			}
+		}()
+	}
+
 	log.Printf("✦ Nexus running at http://localhost:%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, r))
+}
+
+// generateSelfSignedCert creates an in-memory self-signed TLS certificate
+// valid for localhost and all current local network IPs.
+func generateSelfSignedCert() (tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	// Collect all local IPs so the cert is valid for LAN access
+	localIPs := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		addrs, _ := iface.Addrs()
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok {
+				localIPs = append(localIPs, ipNet.IP)
+			}
+		}
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: "nexus-local"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  localIPs,
+		DNSNames:     []string{"localhost"},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	keyBytes, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
+
+	return tls.X509KeyPair(certPEM, keyPEM)
 }
 
 func getEnv(key, fallback string) string {

@@ -94,3 +94,10 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 	go client.writePump()
 	go client.readPump()
 }
+
+// VoiceRooms returns a snapshot of who is currently in each voice room.
+// Used by clients on page load to populate sidebar participant lists.
+func (h *Handler) VoiceRooms(w http.ResponseWriter, r *http.Request) {
+	snapshot := h.hub.GetVoiceRoomSnapshot()
+	ok(w, map[string]interface{}{"rooms": snapshot})
+}
