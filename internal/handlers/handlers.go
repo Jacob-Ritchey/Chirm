@@ -6,9 +6,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"nexus/internal/auth"
-	"nexus/internal/db"
-	mw "nexus/internal/middleware"
+	"chirm/internal/auth"
+	"chirm/internal/db"
+	mw "chirm/internal/middleware"
 )
 
 var upgrader = websocket.Upgrader{

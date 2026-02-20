@@ -1,4 +1,4 @@
-# ✦ Nexus
+# ✦ Chirm
 
 **Self-hosted community chat.** Discord-style messaging for your Raspberry Pi, VPS, or home server. Single binary, SQLite database, zero external dependencies.
 
@@ -24,8 +24,8 @@
 ### Option 1: Docker Compose (Recommended)
 
 ```bash
-git clone https://github.com/yourname/nexus
-cd nexus
+git clone https://github.com/yourname/chirm
+cd chirm
 
 # Create .env from example
 cp .env.example .env
@@ -41,14 +41,14 @@ Open `http://localhost:8080` and follow the setup wizard.
 **Requirements:** Go 1.21+
 
 ```bash
-git clone https://github.com/yourname/nexus
-cd nexus
+git clone https://github.com/yourname/chirm
+cd chirm
 
 go mod tidy
-go build -o nexus .
+go build -o chirm .
 
 # Run
-JWT_SECRET=your-secret-here ./nexus
+JWT_SECRET=your-secret-here ./chirm
 ```
 
 Open `http://localhost:8080`.
@@ -57,11 +57,11 @@ Open `http://localhost:8080`.
 
 ```bash
 # On your Pi (or cross-compile from x86)
-GOOS=linux GOARCH=arm64 go build -o nexus-arm64 .
+GOOS=linux GOARCH=arm64 go build -o chirm-arm64 .
 
 # Transfer to Pi, then:
-chmod +x nexus-arm64
-JWT_SECRET=your-secret ./nexus-arm64
+chmod +x chirm-arm64
+JWT_SECRET=your-secret ./chirm-arm64
 ```
 
 ---
@@ -118,7 +118,7 @@ Generate invite links in the Admin Panel → Invites tab. Share the link — it 
 ## Architecture
 
 ```
-nexus/
+chirm/
 ├── main.go                      Entry point, router setup
 ├── internal/
 │   ├── auth/auth.go             JWT generation & bcrypt hashing
@@ -143,7 +143,7 @@ nexus/
         └── app.js               Application logic, rendering, admin panel
 ```
 
-Static files are **embedded in the binary** via Go's `//go:embed` directive, so deploying is just copying the single `nexus` file.
+Static files are **embedded in the binary** via Go's `//go:embed` directive, so deploying is just copying the single `chirm` file.
 
 ---
 
@@ -221,7 +221,7 @@ Your data lives entirely in `DATA_DIR` (default `./data`):
 
 ```
 data/
-├── nexus.db       ← SQLite database (all messages, users, settings)
+├── chirm.db       ← SQLite database (all messages, users, settings)
 └── uploads/       ← Uploaded files
 ```
 
@@ -232,8 +232,8 @@ To back up, just copy this directory. To restore, replace it.
 cp -r ./data ./data-backup-$(date +%Y%m%d)
 
 # Or with Docker
-docker run --rm -v nexus_nexus-data:/data -v $(pwd):/backup alpine \
-  tar czf /backup/nexus-backup.tar.gz -C /data .
+docker run --rm -v chirm_chirm-data:/data -v $(pwd):/backup alpine \
+  tar czf /backup/chirm-backup.tar.gz -C /data .
 ```
 
 ---
@@ -241,9 +241,9 @@ docker run --rm -v nexus_nexus-data:/data -v $(pwd):/backup alpine \
 ## Production Notes
 
 - Set a strong `JWT_SECRET` — at least 32 random characters
-- Put Nexus behind a reverse proxy (nginx/Caddy/Traefik) for HTTPS
+- Put Chirm behind a reverse proxy (nginx/Caddy/Traefik) for HTTPS
 - The `docker-compose.yml` has commented Traefik labels as a starting point
-- For nginx, proxy `http://nexus:8080` and pass WebSocket upgrade headers:
+- For nginx, proxy `http://chirm:8080` and pass WebSocket upgrade headers:
   ```nginx
   location / {
       proxy_pass http://127.0.0.1:8080;

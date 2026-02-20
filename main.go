@@ -20,10 +20,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 
-	"nexus/internal/auth"
-	"nexus/internal/db"
-	"nexus/internal/handlers"
-	mw "nexus/internal/middleware"
+	"chirm/internal/auth"
+	"chirm/internal/db"
+	"chirm/internal/handlers"
+	mw "chirm/internal/middleware"
 )
 
 //go:embed static
@@ -38,7 +38,7 @@ func main() {
 		log.Fatal("Failed to create data directory:", err)
 	}
 
-	database, err := db.Init(dataDir + "/nexus.db")
+	database, err := db.Init(dataDir + "/chirm.db")
 	if err != nil {
 		log.Fatal("Failed to init database:", err)
 	}
@@ -147,14 +147,14 @@ func main() {
 					Certificates: []tls.Certificate{tlsCert},
 				},
 			}
-			log.Printf("✦ Nexus HTTPS (voice-ready) at https://localhost:%s", httpsPort)
+			log.Printf("✦ Chirm HTTPS (voice-ready) at https://localhost:%s", httpsPort)
 			if err := tlsServer.ListenAndServeTLS("", ""); err != nil {
 				log.Printf("HTTPS server error: %v", err)
 			}
 		}()
 	}
 
-	log.Printf("✦ Nexus running at http://localhost:%s", port)
+	log.Printf("✦ Chirm running at http://localhost:%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, r))
 }
 
@@ -180,7 +180,7 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: "nexus-local"},
+		Subject:      pkix.Name{CommonName: "chirm-local"},
 		NotBefore:    time.Now().Add(-time.Minute),
 		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,

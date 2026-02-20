@@ -126,7 +126,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
-		Name:   "nexus_token",
+		Name:   "chirm_token",
 		Value:  "",
 		Path:   "/",
 		MaxAge: -1,

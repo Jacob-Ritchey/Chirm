@@ -1,4 +1,4 @@
-// voice.js — WebRTC voice/video room manager for Nexus
+// voice.js — WebRTC voice/video room manager for Chirm
 // Mesh P2P topology. Server relays signaling only.
 
 const Voice = (() => {

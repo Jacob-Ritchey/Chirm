@@ -86,7 +86,7 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 
 func setTokenCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     "nexus_token",
+		Name:     "chirm_token",
 		Value:    token,
 		Path:     "/",
 		MaxAge:   30 * 24 * 3600,

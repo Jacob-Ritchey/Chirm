@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"nexus/internal/auth"
+	"chirm/internal/auth"
 )
 
 type contextKey string
@@ -18,7 +18,7 @@ func Auth(svc *auth.Service) func(http.Handler) http.Handler {
 			tokenStr := ""
 
 			// Try cookie first
-			if cookie, err := r.Cookie("nexus_token"); err == nil {
+			if cookie, err := r.Cookie("chirm_token"); err == nil {
 				tokenStr = cookie.Value
 			}
 

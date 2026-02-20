@@ -11,22 +11,22 @@ RUN go mod download
 COPY . .
 
 # Build static binary (no CGO needed - pure Go SQLite driver)
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o nexus .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o chirm .
 
 # ── Final Stage ───────────────────────────────────────────────────────────────
 FROM alpine:3.19
 
 RUN apk add --no-cache ca-certificates tzdata && \
-    addgroup -S nexus && adduser -S nexus -G nexus
+    addgroup -S chirm && adduser -S chirm -G chirm
 
 WORKDIR /app
 
-COPY --from=builder /build/nexus .
+COPY --from=builder /build/chirm .
 
 # Create data directory
-RUN mkdir -p /data/uploads && chown -R nexus:nexus /data
+RUN mkdir -p /data/uploads && chown -R chirm:chirm /data
 
-USER nexus
+USER chirm
 
 VOLUME ["/data"]
 
@@ -35,4 +35,4 @@ EXPOSE 8080
 ENV DATA_DIR=/data \
     PORT=8080
 
-ENTRYPOINT ["./nexus"]
+ENTRYPOINT ["./chirm"]

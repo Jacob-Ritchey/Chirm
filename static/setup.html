@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Nexus — Setup</title>
+  <title>Chirm — Setup</title>
   <link rel="stylesheet" href="/css/app.css">
   <style>
     html, body { height: 100%; overflow: auto; }
@@ -21,7 +21,7 @@
     <div id="step-1" class="setup-step">
       <div class="auth-logo">
         <div class="logo-icon">✦</div>
-        <h1>Welcome to Nexus</h1>
+        <h1>Welcome to Chirm</h1>
         <p>Self-hosted community chat. Let's get you set up.</p>
       </div>
 
@@ -96,7 +96,7 @@
 
       <div style="display:flex;gap:8px">
         <button class="btn btn-ghost" onclick="goStep(2)">← Back</button>
-        <button class="btn btn-primary" style="flex:1" id="setup-btn" onclick="doSetup()">Launch Nexus ✦</button>
+        <button class="btn btn-primary" style="flex:1" id="setup-btn" onclick="doSetup()">Launch Chirm ✦</button>
       </div>
     </div>
 
@@ -171,7 +171,7 @@
       if (!res.ok) {
         errEl.textContent = data.error || 'Setup failed';
         errEl.style.display = 'block';
-        btn.textContent = 'Launch Nexus ✦';
+        btn.textContent = 'Launch Chirm ✦';
         btn.disabled = false;
         return;
       }
@@ -179,7 +179,7 @@
     } catch (e) {
       errEl.textContent = 'Network error. Is the server running?';
       errEl.style.display = 'block';
-      btn.textContent = 'Launch Nexus ✦';
+      btn.textContent = 'Launch Chirm ✦';
       btn.disabled = false;
     }
   }

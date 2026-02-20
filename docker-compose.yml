@@ -1,15 +1,15 @@
 version: '3.9'
 
 services:
-  nexus:
+  chirm:
     build: .
-    image: nexus:latest
-    container_name: nexus
+    image: chirm:latest
+    container_name: chirm
     restart: unless-stopped
     ports:
       - "8080:8080"           # Change left port to expose differently, e.g. "80:8080"
     volumes:
-      - nexus-data:/data      # Persistent SQLite DB + uploaded files
+      - chirm-data:/data      # Persistent SQLite DB + uploaded files
     environment:
       PORT: "8080"
       DATA_DIR: "/data"
@@ -22,7 +22,7 @@ services:
       start_period: 10s
 
 volumes:
-  nexus-data:
+  chirm-data:
     driver: local
 
 # ── Traefik example (optional, for reverse proxy with SSL) ────────────────────
@@ -30,6 +30,6 @@ volumes:
 #
 #   labels:
 #     - "traefik.enable=true"
-#     - "traefik.http.routers.nexus.rule=Host(`chat.yourdomain.com`)"
-#     - "traefik.http.routers.nexus.entrypoints=websecure"
-#     - "traefik.http.routers.nexus.tls.certresolver=letsencrypt"
+#     - "traefik.http.routers.chirm.rule=Host(`chat.yourdomain.com`)"
+#     - "traefik.http.routers.chirm.entrypoints=websecure"
+#     - "traefik.http.routers.chirm.tls.certresolver=letsencrypt"

@@ -1,4 +1,4 @@
-// app.js — Nexus main application
+// app.js — Chirm main application
 
 // ─── STATE ───────────────────────────────────────────────────────────────────
 const App = {
@@ -169,8 +169,8 @@ async function loadMessages(channelId, before = null) {
 // ─── RENDER ───────────────────────────────────────────────────────────────────
 function renderServerHeader() {
   const settings = api.get('/api/settings').then(s => {
-    document.getElementById('server-name').textContent = s.server_name || 'Nexus';
-    document.title = s.server_name || 'Nexus';
+    document.getElementById('server-name').textContent = s.server_name || 'Chirm';
+    document.title = s.server_name || 'Chirm';
   }).catch(() => {});
 }
 

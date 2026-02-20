@@ -1,4 +1,4 @@
-module nexus
+module chirm
 
 go 1.21
 

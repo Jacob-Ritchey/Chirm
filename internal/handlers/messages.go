@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"nexus/internal/db"
+	"chirm/internal/db"
 )
 
 func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
