@@ -10,12 +10,11 @@ const Voice = (() => {
   let deafened = false;
   let videoTrackAvailable = false;
 
-  // peers: userId → { pc: RTCPeerConnection }
+  // peers: userId → { pc: RTCPeerConnection, initiator: bool }
+  // BUG 1 FIX: Store `initiator` so we know who should re-offer on reconnect.
   const peers = {};
 
   // camStateByPeer: userId → bool — tracks whether each remote has cam on.
-  // Maintained via voice.media_state signaling so we never rely on
-  // WebRTC track.enabled (which reflects local state, not remote intent).
   const camStateByPeer = {};
 
   const ICE_SERVERS = [
@@ -36,11 +35,8 @@ const Voice = (() => {
     return false;
   }
 
-  // ── Public API ────────────────────────────────────────────────────────────
-
   // ── Loading screen (shown immediately while getUserMedia prompt is up) ──────
   function showVoiceLoadingUI(channelId) {
-    // Hide text-channel UI
     document.getElementById('messages-container').style.display = 'none';
     document.getElementById('message-input-area').style.display = 'none';
     document.getElementById('typing-indicator').style.display = 'none';
@@ -121,16 +117,11 @@ const Voice = (() => {
     videoTrackAvailable = false;
     deafened = false;
 
-    // Show loading screen immediately — before the browser permission prompt.
     showVoiceLoadingUI(channelId);
 
-    // Request audio + video together — one browser prompt covers both.
-    // If video is denied, fall back gracefully to audio-only.
     try {
       localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
       videoTrackAvailable = true;
-      // Camera OFF by default — track stays in stream but disabled.
-      // Peers will receive no video until user explicitly enables it.
       localStream.getVideoTracks().forEach(t => { t.enabled = false; });
     } catch {
       try {
@@ -148,7 +139,6 @@ const Voice = (() => {
     micEnabled = true;
     camEnabled = false;
 
-    // Update loading sub-text while WebRTC negotiation starts
     const subEl = document.querySelector('.voice-loading-sub');
     if (subEl) subEl.textContent = 'Establishing connection…';
 
@@ -181,11 +171,9 @@ const Voice = (() => {
 
     hideVoiceUI();
 
-    // Clear sidebar status bar
     const bar = document.getElementById('voice-status-bar');
     if (bar) bar.style.display = 'none';
 
-    // Remove split-view class if present
     document.getElementById('main')?.classList.remove('split-voice');
   }
 
@@ -207,7 +195,6 @@ const Voice = (() => {
     camEnabled = !camEnabled;
     localStream.getVideoTracks().forEach(t => { t.enabled = camEnabled; });
 
-    // Renegotiate video track for existing peers if turning on
     if (camEnabled) {
       const videoTrack = localStream.getVideoTracks()[0];
       if (videoTrack) {
@@ -218,7 +205,6 @@ const Voice = (() => {
       }
     }
 
-    // Announce new cam state to all room members
     sendMediaState();
     attachLocalVideo();
     updateVoiceControls();
@@ -227,15 +213,15 @@ const Voice = (() => {
 
   function toggleDeafen() {
     deafened = !deafened;
-    // Mute/unmute audio on all remote tiles
-    document.querySelectorAll('#voice-grid .vc-tile:not(#voice-tile-local) video').forEach(v => {
-      v.muted = deafened;
+    // BUG 2 FIX: Deafen now targets <audio> elements (remote audio is played
+    // through a dedicated audio element, not the video element).
+    document.querySelectorAll('#voice-grid .vc-tile:not(#voice-tile-local) audio').forEach(a => {
+      a.muted = deafened;
     });
     updateVoiceControls();
     updateVoiceStatusBar();
   }
 
-  // Broadcast our current cam state to everyone else in the room
   function sendMediaState() {
     if (!currentChannelId) return;
     WS.send('voice.media_state', {
@@ -252,7 +238,6 @@ const Voice = (() => {
     for (const uid of participants) {
       if (uid !== App.user.id) createPeer(uid, true);
     }
-    // Announce our cam state to existing participants
     if (participants.length > 0) sendMediaState();
   }
 
@@ -260,7 +245,6 @@ const Voice = (() => {
     if (data.channel_id !== currentChannelId) return;
     if (data.user_id === App.user.id) return;
     createPeer(data.user_id, false);
-    // Announce our cam state to the new arrival
     sendMediaState();
   }
 
@@ -275,7 +259,6 @@ const Voice = (() => {
     if (data.channel_id !== currentChannelId) return;
     const uid = data.from_user_id;
     camStateByPeer[uid] = data.cam_enabled;
-    // Update that peer's tile to show video or avatar
     const tile = document.getElementById(`voice-tile-${uid}`);
     if (tile) applyVideoVisibility(tile, data.cam_enabled);
   }
@@ -319,7 +302,8 @@ const Voice = (() => {
     if (peers[uid]) return peers[uid];
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    peers[uid] = { pc };
+    // BUG 1 FIX: Store initiator so reconnection logic knows who sends the new offer.
+    peers[uid] = { pc, initiator };
 
     if (localStream) {
       localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
@@ -339,8 +323,26 @@ const Voice = (() => {
       upsertPeerTile(uid, e.streams[0]);
     };
 
+    // BUG 1 FIX: On ICE failure, attempt to reconnect rather than just silently
+    // destroying the peer. The server is never told about the failure, so both
+    // sides still appear in the sidebar — but the media connection is dead.
+    // We destroy the old PC and, after a short delay, recreate it. The initiator
+    // sends a fresh offer; the non-initiator waits for an incoming offer.
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+      const state = pc.connectionState;
+      if (state === 'failed') {
+        console.warn(`[voice] ICE failed for peer ${uid} — scheduling reconnect`);
+        const wasInitiator = peers[uid]?.initiator;
+        destroyPeer(uid);
+        if (currentChannelId) {
+          setTimeout(() => {
+            if (currentChannelId) {
+              console.log(`[voice] Reconnecting to ${uid} (initiator=${wasInitiator})`);
+              createPeer(uid, wasInitiator);
+            }
+          }, 1500);
+        }
+      } else if (state === 'closed') {
         destroyPeer(uid);
         removePeerTile(uid);
       }
@@ -371,12 +373,17 @@ const Voice = (() => {
 
   // ── UI helpers ────────────────────────────────────────────────────────────
 
-  // Show video element and hide avatar, or vice versa
+  // Show video element and hide avatar, or vice versa.
+  // BUG 2 FIX: We no longer use display:none on the <video> element because
+  // some browsers pause or block autoplay on hidden video elements, which also
+  // kills audio. The <video> is now only used for the visual feed. Audio is
+  // handled by a separate always-present <audio> element (see upsertPeerTile).
   function applyVideoVisibility(tile, showVideo) {
     const vid = tile.querySelector('video');
-    const av = tile.querySelector('.vc-avatar');
+    const av  = tile.querySelector('.vc-avatar');
     if (vid) vid.style.display = showVideo ? 'block' : 'none';
-    if (av) av.style.display = showVideo ? 'none' : 'flex';
+    if (av)  av.style.display  = showVideo ? 'none'  : 'flex';
+    // Note: the <audio> element is always present and unaffected by this toggle.
   }
 
   function renderVoiceUI() {
@@ -389,8 +396,6 @@ const Voice = (() => {
       ? (App.channels.find(c => c.id === currentChannelId) || null) : null;
     const name = ch ? ch.name : 'Voice';
 
-    // Panel header is shown only in split-view mode (CSS controls visibility).
-    // Controls live in the sidebar #voice-status-bar.
     panel.innerHTML = `
       <div id="voice-panel-header">
         <div class="vp-channel-name">&#x1F50A; ${esc(name)}</div>
@@ -429,9 +434,9 @@ const Voice = (() => {
     }
     if (vid) {
       vid.srcObject = localStream;
+      vid.play().catch(() => {});
     }
 
-    // Visibility driven by camEnabled, not track state
     applyVideoVisibility(tile, camEnabled && videoTrackAvailable);
   }
 
@@ -455,19 +460,48 @@ const Voice = (() => {
       grid.appendChild(tile);
     }
 
-    // Attach the media stream to the video element, creating it if needed
     const wrap = tile.querySelector('.vc-video-wrap');
+
+    // ── Video element (visual only, muted) ──────────────────────────────────
+    // BUG 2 FIX: The <video> element is muted and used exclusively for the
+    // camera feed. Keeping it muted means display:none (cam-off state) cannot
+    // silently kill audio, because audio was never routed through it.
     let vid = tile.querySelector('video');
     if (!vid) {
       vid = document.createElement('video');
       vid.autoplay = true;
       vid.playsInline = true;
-      vid.muted = deafened;
+      vid.muted = true; // ← muted; audio comes from the <audio> element below
       wrap.appendChild(vid);
     }
-    vid.srcObject = stream;
+    if (stream) {
+      // Attach only the video tracks to the <video> element
+      const videoStream = new MediaStream(stream.getVideoTracks());
+      vid.srcObject = videoStream;
+      vid.play().catch(() => {});
+    }
 
-    // Initial visibility: show avatar until we get a media_state saying cam is on
+    // ── Audio element (always present, never hidden) ─────────────────────────
+    // BUG 2 FIX: A dedicated <audio> element carries remote audio. It lives
+    // outside .vc-video-wrap so CSS/display changes on the tile never touch it.
+    // This guarantees audio plays regardless of whether the camera is on/off.
+    let aud = tile.querySelector('audio');
+    if (!aud) {
+      aud = document.createElement('audio');
+      aud.autoplay = true;
+      aud.playsInline = true;
+      aud.muted = deafened;
+      tile.appendChild(aud); // attached to tile, not wrap — immune to video-wrap visibility
+    }
+    if (stream) {
+      const audioStream = new MediaStream(stream.getAudioTracks());
+      aud.srcObject = audioStream;
+      // Explicitly call play() — browser autoplay policy may block the
+      // `autoplay` attribute when the element is created outside a user gesture.
+      aud.play().catch(() => {});
+    }
+
+    // Initial video visibility: show avatar until cam is enabled on remote
     applyVideoVisibility(tile, camStateByPeer[uid] === true);
   }
 
@@ -483,7 +517,6 @@ const Voice = (() => {
     const name = user?.username || '?';
     const initial = name[0].toUpperCase();
 
-    // Use avatar image if available, else coloured initial
     let avatarInner;
     if (user?.avatar) {
       avatarInner = `<img src="${esc(user.avatar)}" alt="${esc(initial)}" class="vc-avatar-img">`;
@@ -505,7 +538,6 @@ const Voice = (() => {
   }
 
   function updateVoiceControls() {
-    // Controls are now in the sidebar status bar — delegate there.
     updateVoiceStatusBar();
   }
 
@@ -519,7 +551,6 @@ const Voice = (() => {
     if (btn) btn.textContent = collapsed ? '▲' : '▼';
   }
 
-  // Navigate back to the full-screen voice view from split mode.
   function showFullView() {
     if (!currentChannelId) return;
     const main = document.getElementById('main');
@@ -532,7 +563,6 @@ const Voice = (() => {
       panel.classList.remove('vc-panel-collapsed');
       panel.style.flex = '';
     }
-    // Update header to reflect voice channel
     const ch = typeof App !== 'undefined' && App.channels
       ? (App.channels.find(c => c.id === currentChannelId) || null) : null;
     if (ch) {
@@ -556,6 +586,24 @@ const Voice = (() => {
     WS.on('voice.offer',       onOffer);
     WS.on('voice.answer',      onAnswer);
     WS.on('voice.ice',         onIce);
+
+    // BUG 1 FIX: Handle WebSocket reconnects.
+    // When the WS drops, the server calls leaveAllVoiceRooms() which broadcasts
+    // voice.left to peers — they destroy their connections. On WS reconnect,
+    // we must re-join so the server re-adds us to the room and sends back a
+    // fresh voice.room_state, which triggers new peer connections.
+    WS.on('ws.connected', () => {
+      if (!currentChannelId) return;
+      console.log('[voice] WS reconnected — rejoining voice channel', currentChannelId);
+      // Tear down stale peer connections (the server-side state was cleared on disconnect)
+      for (const uid of Object.keys(peers)) destroyPeer(uid);
+      // Small delay to let the WS subscribe handshake complete first
+      setTimeout(() => {
+        if (currentChannelId) {
+          WS.send('voice.join', { channel_id: currentChannelId });
+        }
+      }, 300);
+    });
   }
 
   function isInChannel(channelId) {
