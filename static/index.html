@@ -22,6 +22,22 @@
       <!-- Populated by JS -->
     </div>
 
+    <!-- ─── VOICE STATUS BAR (shown while in a call) ─── -->
+    <div id="voice-status-bar" style="display:none">
+      <div id="vsb-info">
+        <div id="vsb-status-text">
+          <span class="vsb-live-dot"></span>
+          <span id="vsb-channel-label">Voice Connected</span>
+        </div>
+      </div>
+      <div id="vsb-controls">
+        <button id="vsb-mic"   class="vsb-btn active" onclick="Voice.toggleMic()"    title="Mute Mic"><span>🎙</span></button>
+        <button id="vsb-deaf"  class="vsb-btn"        onclick="Voice.toggleDeafen()" title="Deafen"><span>🔈</span></button>
+        <button id="vsb-cam"   class="vsb-btn"        onclick="Voice.toggleCam()"    title="Toggle Camera"><span>📷</span></button>
+        <button id="vsb-leave" class="vsb-btn vsb-leave" onclick="Voice.leave()"     title="Leave Voice"><span>📵</span></button>
+      </div>
+    </div>
+
     <div id="user-panel">
       <div id="user-info" class="flex-center gap-8">
         <!-- Populated by JS -->

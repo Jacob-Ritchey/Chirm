@@ -1116,3 +1116,190 @@ pre code { background: none; border: none; padding: 0; }
   color: var(--danger);
   box-shadow: 0 0 0 2px var(--danger), 0 2px 8px rgba(0,0,0,0.3);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VOICE UX IMPROVEMENTS  (loading · status bar · split view · collapse)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Loading screen ───────────────────────────────────────────────────── */
+#voice-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: var(--bg-base);
+}
+
+.voice-loading-spinner {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 3px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: vc-spin 0.75s linear infinite;
+}
+
+@keyframes vc-spin { to { transform: rotate(360deg); } }
+
+.voice-loading-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.voice-loading-sub {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: -10px;
+}
+
+/* ── 2. Sidebar voice-status-bar ─────────────────────────────────────────── */
+#voice-status-bar {
+  padding: 10px 10px 8px;
+  background: rgba(63, 186, 122, 0.07);
+  border-top: 1px solid rgba(63, 186, 122, 0.22);
+  border-bottom: 1px solid rgba(63, 186, 122, 0.22);
+  flex-shrink: 0;
+}
+
+#vsb-info { margin-bottom: 8px; }
+
+#vsb-status-text {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--success);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vsb-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+  animation: vsb-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes vsb-pulse {
+  0%, 100% { opacity: 1; transform: scale(1);   }
+  50%       { opacity: 0.4; transform: scale(.8); }
+}
+
+#vsb-controls {
+  display: flex;
+  gap: 5px;
+}
+
+.vsb-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  border: none;
+  cursor: pointer;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 15px;
+  transition: background 0.14s, transform 0.1s;
+}
+
+.vsb-btn:hover  { background: var(--bg-hover); transform: scale(1.06); }
+.vsb-btn:active { transform: scale(0.94); }
+
+.vsb-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+
+.vsb-btn.muted {
+  background: rgba(224, 82, 82, 0.16);
+  color: var(--danger);
+  box-shadow: 0 0 0 1.5px var(--danger);
+}
+
+.vsb-btn.vsb-leave { background: rgba(224, 82, 82, 0.12); color: var(--danger); }
+.vsb-btn.vsb-leave:hover { background: var(--danger); color: #fff; }
+
+.vsb-btn.vc-disabled { opacity: 0.35; cursor: not-allowed; }
+.vsb-btn.vc-disabled:hover { transform: none; background: var(--bg-surface); }
+
+/* ── 3. Split-view: text channel on top, mini voice panel at bottom ────── */
+#main.split-voice {
+  /* #main is already a flex-column — no structural change needed */
+}
+
+/* Push voice-panel to after the input area in visual order */
+#main.split-voice #voice-panel {
+  order: 20;
+  flex: 0 0 210px;
+  border-top: 2px solid var(--border-strong);
+  min-height: 0;
+}
+
+#main.split-voice #messages-container { flex: 1 1 0; min-height: 0; }
+
+/* Collapsed mini bar */
+#main.split-voice #voice-panel.vc-panel-collapsed {
+  flex: 0 0 42px;
+}
+
+#main.split-voice #voice-panel.vc-panel-collapsed #voice-grid {
+  display: none;
+}
+
+/* ── 4. Voice-panel header row (shown in split / collapsed state) ─────── */
+#voice-panel-header {
+  display: none;           /* hidden in full-panel mode */
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  height: 42px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#main.split-voice #voice-panel-header { display: flex; }
+
+.vp-channel-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--success);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vp-header-actions { display: flex; gap: 4px; }
+
+.vp-hdr-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+  transition: color 0.14s, background 0.14s;
+}
+
+.vp-hdr-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* Full-screen button: jump back to full voice view */
+.vp-fullscreen-btn { font-size: 13px; }

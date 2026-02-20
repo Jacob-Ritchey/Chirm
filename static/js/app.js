@@ -285,26 +285,23 @@ async function openChannel(ch) {
   // ── Voice channel: join/toggle voice room ──────────────────────────────
   if (ch.type === 'voice') {
     if (Voice.isInChannel(ch.id)) {
-      // Already in this room — leave
-      await Voice.leave();
+      // Already in this room — navigate to the full voice view without disconnecting.
+      Voice.showFullView();
+      if (PanelMgr.isMobile()) PanelMgr.close('channels');
     } else {
-      // Show voice panel, hide text UI
-      document.getElementById('messages-container').style.display = 'none';
-      document.getElementById('message-input-area').style.display = 'none';
-      document.getElementById('typing-indicator').style.display = 'none';
-
+      // Joining a new room: loading screen + getUserMedia will be shown by Voice.join().
       // Update header
       document.getElementById('ch-title').textContent = ch.name;
       document.getElementById('ch-desc').textContent = ch.description || 'Voice Channel';
       document.querySelector('.ch-hash').textContent = '🔊';
+      // Remove split-view class in case we were in split mode from a prior call
+      document.getElementById('main').classList.remove('split-voice');
 
       const joined = await Voice.join(ch.id);
 
       if (joined) {
         // Optimistically add self to participant list immediately so the
         // sidebar shows the current user without waiting for the WS round-trip.
-        // (Especially important on mobile where the sidebar may be re-opened
-        // before the voice.joined event arrives.)
         if (!App.voiceParticipants[ch.id]) App.voiceParticipants[ch.id] = new Set();
         App.voiceParticipants[ch.id].add(App.user.id);
       }
@@ -314,11 +311,26 @@ async function openChannel(ch) {
   }
 
   // ── Text channel ───────────────────────────────────────────────────────
-  // Restore text UI if we were in a voice panel
+  // Restore text UI.
   document.getElementById('messages-container').style.display = '';
   document.getElementById('message-input-area').style.display = '';
   document.getElementById('typing-indicator').style.display = '';
   document.querySelector('.ch-hash').textContent = '#';
+
+  // If the user is in an active voice call, activate split-view so the
+  // mini voice panel stays visible at the bottom of the text channel.
+  const main = document.getElementById('main');
+  const voicePanel = document.getElementById('voice-panel');
+  if (Voice.inCall()) {
+    main.classList.add('split-voice');
+    voicePanel.style.display = 'flex';
+    // Reset collapse state when switching text channels
+    voicePanel.classList.remove('vc-panel-collapsed');
+    const colBtn = document.getElementById('vp-collapse-btn');
+    if (colBtn) { colBtn.textContent = '▼'; colBtn.title = 'Collapse voice panel'; }
+  } else {
+    main.classList.remove('split-voice');
+  }
 
   App.currentChannel = ch;
   App.unread.delete(ch.id);

@@ -38,6 +38,81 @@ const Voice = (() => {
 
   // ── Public API ────────────────────────────────────────────────────────────
 
+  // ── Loading screen (shown immediately while getUserMedia prompt is up) ──────
+  function showVoiceLoadingUI(channelId) {
+    // Hide text-channel UI
+    document.getElementById('messages-container').style.display = 'none';
+    document.getElementById('message-input-area').style.display = 'none';
+    document.getElementById('typing-indicator').style.display = 'none';
+
+    const panel = document.getElementById('voice-panel');
+    panel.style.display = 'flex';
+    panel.style.flexDirection = 'column';
+
+    const ch = typeof App !== 'undefined' && App.channels
+      ? (App.channels.find(c => c.id === channelId) || null) : null;
+    const name = ch ? ch.name : 'voice';
+
+    panel.innerHTML = `
+      <div id="voice-loading">
+        <div class="voice-loading-spinner"></div>
+        <div class="voice-loading-title">Joining #${esc(name)}</div>
+        <div class="voice-loading-sub">Requesting permissions…</div>
+      </div>
+    `;
+  }
+
+  // ── Sidebar voice-status-bar ───────────────────────────────────────────────
+  function renderVoiceStatusBar() {
+    const bar = document.getElementById('voice-status-bar');
+    if (!bar) return;
+
+    if (!currentChannelId) {
+      bar.style.display = 'none';
+      return;
+    }
+
+    const ch = typeof App !== 'undefined' && App.channels
+      ? (App.channels.find(c => c.id === currentChannelId) || null) : null;
+    const name = ch ? ch.name : 'Voice';
+
+    document.getElementById('vsb-channel-label').textContent = name;
+    bar.style.display = 'block';
+
+    updateVoiceStatusBar();
+  }
+
+  function updateVoiceStatusBar() {
+    const micBtn  = document.getElementById('vsb-mic');
+    const deafBtn = document.getElementById('vsb-deaf');
+    const camBtn  = document.getElementById('vsb-cam');
+    if (!micBtn) return;
+
+    micBtn.classList.toggle('active', micEnabled && !deafened);
+    micBtn.classList.toggle('muted',  !micEnabled || deafened);
+    micBtn.querySelector('span').textContent = (micEnabled && !deafened) ? '🎙' : '🔇';
+    micBtn.title = micEnabled ? 'Mute Mic' : 'Unmute Mic';
+
+    deafBtn.classList.toggle('active', !deafened);
+    deafBtn.classList.toggle('muted',  deafened);
+    deafBtn.querySelector('span').textContent = deafened ? '🔇' : '🔈';
+    deafBtn.title = deafened ? 'Undeafen' : 'Deafen';
+
+    if (camBtn) {
+      if (!videoTrackAvailable) {
+        camBtn.classList.remove('active', 'muted');
+        camBtn.classList.add('vc-disabled');
+        camBtn.querySelector('span').textContent = '🚫';
+        camBtn.title = 'Camera unavailable';
+      } else {
+        camBtn.classList.remove('vc-disabled');
+        camBtn.classList.toggle('active', camEnabled);
+        camBtn.querySelector('span').textContent = '📷';
+        camBtn.title = camEnabled ? 'Disable Camera' : 'Enable Camera';
+      }
+    }
+  }
+
   async function join(channelId) {
     if (currentChannelId) await leave();
     if (!checkSecureContext()) return false;
@@ -45,6 +120,9 @@ const Voice = (() => {
     currentChannelId = channelId;
     videoTrackAvailable = false;
     deafened = false;
+
+    // Show loading screen immediately — before the browser permission prompt.
+    showVoiceLoadingUI(channelId);
 
     // Request audio + video together — one browser prompt covers both.
     // If video is denied, fall back gracefully to audio-only.
@@ -70,8 +148,13 @@ const Voice = (() => {
     micEnabled = true;
     camEnabled = false;
 
+    // Update loading sub-text while WebRTC negotiation starts
+    const subEl = document.querySelector('.voice-loading-sub');
+    if (subEl) subEl.textContent = 'Establishing connection…';
+
     renderVoiceUI();
     attachLocalVideo();
+    renderVoiceStatusBar();
 
     WS.send('voice.join', { channel_id: channelId });
     return true;
@@ -97,6 +180,13 @@ const Voice = (() => {
     deafened = false;
 
     hideVoiceUI();
+
+    // Clear sidebar status bar
+    const bar = document.getElementById('voice-status-bar');
+    if (bar) bar.style.display = 'none';
+
+    // Remove split-view class if present
+    document.getElementById('main')?.classList.remove('split-voice');
   }
 
   function toggleMic() {
@@ -104,6 +194,7 @@ const Voice = (() => {
     micEnabled = !micEnabled;
     localStream.getAudioTracks().forEach(t => { t.enabled = micEnabled; });
     updateVoiceControls();
+    updateVoiceStatusBar();
   }
 
   function toggleCam() {
@@ -131,6 +222,7 @@ const Voice = (() => {
     sendMediaState();
     attachLocalVideo();
     updateVoiceControls();
+    updateVoiceStatusBar();
   }
 
   function toggleDeafen() {
@@ -140,6 +232,7 @@ const Voice = (() => {
       v.muted = deafened;
     });
     updateVoiceControls();
+    updateVoiceStatusBar();
   }
 
   // Broadcast our current cam state to everyone else in the room
@@ -290,24 +383,26 @@ const Voice = (() => {
     const panel = document.getElementById('voice-panel');
     if (!panel) return;
     panel.style.display = 'flex';
+    panel.style.flexDirection = 'column';
 
-    const camUnavailable = !videoTrackAvailable;
+    const ch = typeof App !== 'undefined' && App.channels
+      ? (App.channels.find(c => c.id === currentChannelId) || null) : null;
+    const name = ch ? ch.name : 'Voice';
+
+    // Panel header is shown only in split-view mode (CSS controls visibility).
+    // Controls live in the sidebar #voice-status-bar.
     panel.innerHTML = `
-      <div id="voice-grid"></div>
-      <div id="voice-controls">
-        <button id="vc-mic"   class="vc-btn active"  onclick="Voice.toggleMic()"   title="Mute Mic"><span class="vc-icon">🎙</span></button>
-        <button id="vc-deaf"  class="vc-btn"          onclick="Voice.toggleDeafen()" title="Deafen"><span class="vc-icon">🔈</span></button>
-        <button id="vc-cam"   class="vc-btn${camUnavailable ? ' vc-disabled' : ''}"
-          onclick="Voice.toggleCam()"
-          title="${camUnavailable ? 'Camera unavailable' : 'Toggle Camera'}">
-          <span class="vc-icon">${camUnavailable ? '🚫' : '📷'}</span>
-        </button>
-        <button id="vc-leave" class="vc-btn vc-leave" onclick="Voice.leave()"      title="Leave Voice"><span class="vc-icon">📵</span></button>
+      <div id="voice-panel-header">
+        <div class="vp-channel-name">&#x1F50A; ${esc(name)}</div>
+        <div class="vp-header-actions">
+          <button class="vp-hdr-btn vp-fullscreen-btn" onclick="Voice.showFullView()" title="Expand to full view">&#x2922;</button>
+          <button class="vp-hdr-btn" id="vp-collapse-btn" onclick="Voice.collapsePanel()" title="Collapse voice panel">&#x25BC;</button>
+        </div>
       </div>
+      <div id="voice-grid"></div>
     `;
 
     upsertLocalTile();
-    updateVoiceControls();
   }
 
   function hideVoiceUI() {
@@ -410,34 +505,40 @@ const Voice = (() => {
   }
 
   function updateVoiceControls() {
-    const micBtn  = document.getElementById('vc-mic');
-    const deafBtn = document.getElementById('vc-deaf');
-    const camBtn  = document.getElementById('vc-cam');
+    // Controls are now in the sidebar status bar — delegate there.
+    updateVoiceStatusBar();
+  }
 
-    if (micBtn) {
-      micBtn.classList.toggle('active', micEnabled && !deafened);
-      micBtn.classList.toggle('muted', !micEnabled || deafened);
-      micBtn.title = micEnabled ? 'Mute Mic' : 'Unmute Mic';
-      micBtn.querySelector('.vc-icon').textContent = (micEnabled && !deafened) ? '🎙' : '🔇';
+  // ── collapsePanel / showFullView ──────────────────────────────────────────
+  function collapsePanel() {
+    const panel = document.getElementById('voice-panel');
+    if (!panel) return;
+    const collapsed = panel.classList.toggle('vc-panel-collapsed');
+    const btn = document.getElementById('vp-collapse-btn');
+    if (btn) btn.title = collapsed ? 'Expand voice panel' : 'Collapse voice panel';
+    if (btn) btn.textContent = collapsed ? '▲' : '▼';
+  }
+
+  // Navigate back to the full-screen voice view from split mode.
+  function showFullView() {
+    if (!currentChannelId) return;
+    const main = document.getElementById('main');
+    main.classList.remove('split-voice');
+    document.getElementById('messages-container').style.display = 'none';
+    document.getElementById('message-input-area').style.display = 'none';
+    document.getElementById('typing-indicator').style.display = 'none';
+    const panel = document.getElementById('voice-panel');
+    if (panel) {
+      panel.classList.remove('vc-panel-collapsed');
+      panel.style.flex = '';
     }
-
-    if (deafBtn) {
-      deafBtn.classList.toggle('active', !deafened);
-      deafBtn.classList.toggle('muted', deafened);
-      deafBtn.title = deafened ? 'Undeafen' : 'Deafen';
-      deafBtn.querySelector('.vc-icon').textContent = deafened ? '🔇' : '🔈';
-    }
-
-    if (camBtn) {
-      if (!videoTrackAvailable) {
-        camBtn.classList.remove('active');
-        camBtn.classList.add('vc-disabled');
-        camBtn.querySelector('.vc-icon').textContent = '🚫';
-      } else {
-        camBtn.classList.remove('vc-disabled');
-        camBtn.classList.toggle('active', camEnabled);
-        camBtn.querySelector('.vc-icon').textContent = '📷';
-      }
+    // Update header to reflect voice channel
+    const ch = typeof App !== 'undefined' && App.channels
+      ? (App.channels.find(c => c.id === currentChannelId) || null) : null;
+    if (ch) {
+      document.getElementById('ch-title').textContent = ch.name;
+      document.getElementById('ch-desc').textContent = ch.description || 'Voice Channel';
+      document.querySelector('.ch-hash').textContent = '🔊';
     }
   }
 
@@ -461,5 +562,6 @@ const Voice = (() => {
     return currentChannelId === channelId;
   }
 
-  return { init, join, leave, toggleMic, toggleCam, toggleDeafen, isInChannel };
+  function inCall() { return currentChannelId !== null; }
+  return { init, join, leave, toggleMic, toggleCam, toggleDeafen, isInChannel, collapsePanel, showFullView, inCall };
 })();
