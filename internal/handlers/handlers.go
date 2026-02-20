@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 
 	"github.com/gorilla/websocket"
 
@@ -10,12 +11,6 @@ import (
 	"chirm/internal/db"
 	mw "chirm/internal/middleware"
 )
-
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
-}
 
 type Handler struct {
 	db      *db.DB
@@ -26,6 +21,28 @@ type Handler struct {
 
 func New(database *db.DB, authSvc *auth.Service, hub *Hub, dataDir string) *Handler {
 	return &Handler{db: database, auth: authSvc, hub: hub, dataDir: dataDir}
+}
+
+// makeUpgrader builds a WebSocket upgrader that validates the Origin header.
+// allowedOrigin is e.g. "https://chat.yourdomain.com". If empty, only
+// same-host origins (matching the request Host header) are permitted.
+func makeUpgrader(allowedOrigin string) websocket.Upgrader {
+	return websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				// Non-browser clients (curl, API tools) send no Origin — allow.
+				return true
+			}
+			if allowedOrigin != "" {
+				return origin == allowedOrigin
+			}
+			// Default: allow same host only (covers both http and https).
+			return origin == "http://"+r.Host || origin == "https://"+r.Host
+		},
+	}
 }
 
 // --- Response helpers ---
@@ -78,6 +95,7 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	upgrader := makeUpgrader(os.Getenv("ALLOWED_ORIGIN"))
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return

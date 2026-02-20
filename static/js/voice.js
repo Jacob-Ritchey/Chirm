@@ -319,8 +319,26 @@ const Voice = (() => {
       }
     };
 
+    // ontrack fires once per track. We handle audio and video independently
+    // using e.track.kind to avoid a race condition where e.streams[0] may
+    // not yet contain all tracks at the time a given ontrack fires.
+    //
+    // The old pattern — always passing e.streams[0] to upsertPeerTile —
+    // caused upsertPeerTile to set aud.srcObject = new MediaStream([]) when
+    // the video track arrived first and e.streams[0] had no audio tracks yet.
+    // Calling play() on an empty MediaStream locks some browsers into a
+    // "playing silence" state that ignores subsequent srcObject reassignments,
+    // which is why audio was silent while video worked fine.
     pc.ontrack = (e) => {
-      upsertPeerTile(uid, e.streams[0]);
+      if (e.track.kind === 'audio') {
+        // Route the audio track directly to a dedicated <audio> element.
+        // We use e.track directly rather than e.streams[0] so we always have
+        // exactly the audio track regardless of stream state timing.
+        upsertPeerAudio(uid, e.track);
+      } else {
+        // Video: upsertPeerTile creates the tile and sets up the video element.
+        upsertPeerTile(uid, e.streams[0]);
+      }
     };
 
     // BUG 1 FIX: On ICE failure, attempt to reconnect rather than just silently
@@ -463,46 +481,55 @@ const Voice = (() => {
     const wrap = tile.querySelector('.vc-video-wrap');
 
     // ── Video element (visual only, muted) ──────────────────────────────────
-    // BUG 2 FIX: The <video> element is muted and used exclusively for the
-    // camera feed. Keeping it muted means display:none (cam-off state) cannot
-    // silently kill audio, because audio was never routed through it.
+    // The <video> element is muted; audio is handled by upsertPeerAudio below.
     let vid = tile.querySelector('video');
     if (!vid) {
       vid = document.createElement('video');
       vid.autoplay = true;
       vid.playsInline = true;
-      vid.muted = true; // ← muted; audio comes from the <audio> element below
+      vid.muted = true;
       wrap.appendChild(vid);
     }
     if (stream) {
-      // Attach only the video tracks to the <video> element
-      const videoStream = new MediaStream(stream.getVideoTracks());
-      vid.srcObject = videoStream;
-      vid.play().catch(() => {});
+      const videoTracks = stream.getVideoTracks();
+      if (videoTracks.length > 0) {
+        vid.srcObject = new MediaStream(videoTracks);
+        vid.play().catch(() => {});
+      }
     }
 
-    // ── Audio element (always present, never hidden) ─────────────────────────
-    // BUG 2 FIX: A dedicated <audio> element carries remote audio. It lives
-    // outside .vc-video-wrap so CSS/display changes on the tile never touch it.
-    // This guarantees audio plays regardless of whether the camera is on/off.
+    // Initial video visibility: show avatar until cam is enabled on remote
+    applyVideoVisibility(tile, camStateByPeer[uid] === true);
+  }
+
+  // Sets up (or updates) the dedicated <audio> element for a remote peer.
+  // Called from ontrack when e.track.kind === 'audio', so we always have the
+  // exact audio track and never risk setting srcObject to an empty stream.
+  function upsertPeerAudio(uid, audioTrack) {
+    // Ensure the tile exists — audio can arrive before video.
+    let tile = document.getElementById(`voice-tile-${uid}`);
+    if (!tile) {
+      const member = App.members.find(m => m.id === uid) || { id: uid, username: uid.slice(0, 8) };
+      tile = makeTile(uid, member);
+      const grid = document.getElementById('voice-grid');
+      if (grid) grid.appendChild(tile);
+      applyVideoVisibility(tile, camStateByPeer[uid] === true);
+    }
+
     let aud = tile.querySelector('audio');
     if (!aud) {
       aud = document.createElement('audio');
       aud.autoplay = true;
       aud.playsInline = true;
       aud.muted = deafened;
-      tile.appendChild(aud); // attached to tile, not wrap — immune to video-wrap visibility
-    }
-    if (stream) {
-      const audioStream = new MediaStream(stream.getAudioTracks());
-      aud.srcObject = audioStream;
-      // Explicitly call play() — browser autoplay policy may block the
-      // `autoplay` attribute when the element is created outside a user gesture.
-      aud.play().catch(() => {});
+      tile.appendChild(aud); // outside .vc-video-wrap — immune to video visibility changes
     }
 
-    // Initial video visibility: show avatar until cam is enabled on remote
-    applyVideoVisibility(tile, camStateByPeer[uid] === true);
+    // Pause before reassigning srcObject so browsers that are in a "playing
+    // silence" state (from a prior empty-stream assignment) reset cleanly.
+    aud.pause();
+    aud.srcObject = new MediaStream([audioTrack]);
+    aud.play().catch(() => {});
   }
 
   function removePeerTile(uid) {

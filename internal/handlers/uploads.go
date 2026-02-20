@@ -15,19 +15,20 @@ import (
 )
 
 var allowedMimeTypes = map[string]bool{
-	"image/jpeg":      true,
-	"image/png":       true,
-	"image/gif":       true,
-	"image/webp":      true,
-	"image/svg+xml":   true,
-	"video/mp4":       true,
-	"video/webm":      true,
-	"audio/mpeg":      true,
-	"audio/ogg":       true,
-	"audio/wav":       true,
-	"application/pdf": true,
-	"text/plain":      true,
-	"application/zip": true,
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/gif":  true,
+	"image/webp": true,
+	// SVG intentionally excluded — browsers execute embedded scripts in SVG,
+	// making it a stored XSS vector when served from the same origin.
+	"video/mp4":        true,
+	"video/webm":       true,
+	"audio/mpeg":       true,
+	"audio/ogg":        true,
+	"audio/wav":        true,
+	"application/pdf":  true,
+	"text/plain":       true,
+	"application/zip":  true,
 }
 
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +134,11 @@ func (h *Handler) ServeUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := filepath.Join(h.dataDir, "uploads", filename)
+
+	// Fix #2: Force download and prevent MIME-sniffing so browsers never
+	// execute content (especially important for any future edge-case types).
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeFile(w, r, path)
 }
 

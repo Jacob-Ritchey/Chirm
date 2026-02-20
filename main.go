@@ -15,7 +15,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -32,7 +35,14 @@ var staticFiles embed.FS
 func main() {
 	port := getEnv("PORT", "8080")
 	dataDir := getEnv("DATA_DIR", "./data")
-	jwtSecret := getEnv("JWT_SECRET", "change-this-secret-in-production")
+
+	// Fix #4: Refuse to start with a missing or default JWT secret.
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" || jwtSecret == "change-this-secret-in-production" || jwtSecret == "change-me-use-a-long-random-string-here" {
+		log.Fatal("FATAL: JWT_SECRET is not set or is using the insecure default value.\n" +
+			"Generate one with:  openssl rand -hex 32\n" +
+			"Then set it in your environment or .env file before starting Chirm.")
+	}
 
 	if err := os.MkdirAll(dataDir+"/uploads", 0755); err != nil {
 		log.Fatal("Failed to create data directory:", err)
@@ -45,8 +55,19 @@ func main() {
 	defer database.Close()
 
 	authSvc := auth.New(jwtSecret)
-	hub := handlers.NewHub()
+	hub := handlers.NewHub(getEnv("ALLOWED_ORIGIN", ""))
 	go hub.Run()
+
+	// Fix #9: Periodically clean up orphaned attachments (uploaded but never sent).
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := database.CleanOrphanedAttachments(dataDir+"/uploads", 1*time.Hour); err != nil {
+				log.Printf("attachment cleanup error: %v", err)
+			}
+		}
+	}()
 
 	h := handlers.New(database, authSvc, hub, dataDir)
 
@@ -55,11 +76,14 @@ func main() {
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.CleanPath)
 
+	// Fix #3: Per-IP rate limiter for auth endpoints (10 req/min, burst 5).
+	authLimiter := newIPRateLimiter(rate.Every(time.Minute/10), 5)
+
 	// Public API
 	r.Get("/api/setup/status", h.SetupStatus)
 	r.Post("/api/setup", h.Setup)
-	r.Post("/api/auth/login", h.Login)
-	r.Post("/api/auth/register", h.Register)
+	r.With(authLimiter).Post("/api/auth/login", h.Login)
+	r.With(authLimiter).Post("/api/auth/register", h.Register)
 	r.Post("/api/auth/logout", h.Logout)
 	r.Get("/api/join/{code}", h.JoinWithInvite)
 
@@ -210,4 +234,46 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// --- Per-IP rate limiter ---
+
+type ipRateLimiter struct {
+	mu       sync.Mutex
+	limiters map[string]*rate.Limiter
+	r        rate.Limit
+	b        int
+}
+
+func newIPRateLimiter(r rate.Limit, b int) func(http.Handler) http.Handler {
+	rl := &ipRateLimiter{
+		limiters: make(map[string]*rate.Limiter),
+		r:        r,
+		b:        b,
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := r.RemoteAddr
+			// Strip port if present
+			if h, _, err := net.SplitHostPort(ip); err == nil {
+				ip = h
+			}
+			if !rl.get(ip).Allow() {
+				http.Error(w, `{"error":"too many requests"}`, http.StatusTooManyRequests)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func (rl *ipRateLimiter) get(ip string) *rate.Limiter {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if l, ok := rl.limiters[ip]; ok {
+		return l
+	}
+	l := rate.NewLimiter(rl.r, rl.b)
+	rl.limiters[ip] = l
+	return l
 }

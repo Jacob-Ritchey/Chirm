@@ -33,17 +33,20 @@ type Hub struct {
 	mu         sync.RWMutex
 
 	// voiceRooms: channelID → set of clients currently in that voice room
-	voiceRooms   map[string]map[*Client]bool
-	voiceRoomsMu sync.RWMutex
+	voiceRooms    map[string]map[*Client]bool
+	voiceRoomsMu  sync.RWMutex
+
+	allowedOrigin string // used by WS upgrader origin check
 }
 
-func NewHub() *Hub {
+func NewHub(allowedOrigin string) *Hub {
 	return &Hub{
-		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte, 256),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		voiceRooms: make(map[string]map[*Client]bool),
+		clients:       make(map[*Client]bool),
+		broadcast:     make(chan []byte, 256),
+		register:      make(chan *Client),
+		unregister:    make(chan *Client),
+		voiceRooms:    make(map[string]map[*Client]bool),
+		allowedOrigin: allowedOrigin,
 	}
 }
 
@@ -65,16 +68,28 @@ func (h *Hub) Run() {
 			h.leaveAllVoiceRooms(client)
 
 		case message := <-h.broadcast:
+			// Fix #6: collect dead clients under RLock, then evict under write lock
+			// to avoid a map-write-while-read-locked data race.
 			h.mu.RLock()
+			var dead []*Client
 			for client := range h.clients {
 				select {
 				case client.send <- message:
 				default:
-					close(client.send)
-					delete(h.clients, client)
+					dead = append(dead, client)
 				}
 			}
 			h.mu.RUnlock()
+			if len(dead) > 0 {
+				h.mu.Lock()
+				for _, client := range dead {
+					if _, ok := h.clients[client]; ok {
+						close(client.send)
+						delete(h.clients, client)
+					}
+				}
+				h.mu.Unlock()
+			}
 		}
 	}
 }
@@ -212,6 +227,27 @@ func (h *Hub) leaveAllVoiceRooms(client *Client) {
 	}
 }
 
+// AreInSameVoiceRoom returns true if both userIDs have active clients in channelID.
+// Fix #13: Used to gate WebRTC signaling relay.
+func (h *Hub) AreInSameVoiceRoom(channelID, userA, userB string) bool {
+	h.voiceRoomsMu.RLock()
+	defer h.voiceRoomsMu.RUnlock()
+	room, ok := h.voiceRooms[channelID]
+	if !ok {
+		return false
+	}
+	var foundA, foundB bool
+	for c := range room {
+		if c.userID == userA {
+			foundA = true
+		}
+		if c.userID == userB {
+			foundB = true
+		}
+	}
+	return foundA && foundB
+}
+
 // GetVoiceRoomSnapshot returns a map of channelID → []userID for all active rooms
 func (h *Hub) GetVoiceRoomSnapshot() map[string][]string {
 	h.voiceRoomsMu.RLock()
@@ -252,6 +288,8 @@ func (c *Client) readPump() {
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
+	// Fix #7: Limit incoming message size to prevent memory-exhaustion DoS.
+	c.conn.SetReadLimit(64 * 1024) // 64 KB per message
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
@@ -345,7 +383,8 @@ func (c *Client) handleMessage(evt rawClientMessage) {
 			c.hub.Broadcast(evt)
 		}
 
-	// WebRTC signaling relay — server just routes to the target peer
+	// WebRTC signaling relay — server routes to the target peer only if
+	// Fix #13: both sender and target are verified members of the same voice room.
 	case "voice.offer", "voice.answer", "voice.ice":
 		var d struct {
 			ChannelID    string          `json:"channel_id"`
@@ -353,6 +392,10 @@ func (c *Client) handleMessage(evt rawClientMessage) {
 			Payload      json.RawMessage `json:"payload"`
 		}
 		if json.Unmarshal(evt.Data, &d) != nil || d.TargetUserID == "" {
+			return
+		}
+		// Verify both parties are in the same voice room before relaying.
+		if !c.hub.AreInSameVoiceRoom(d.ChannelID, c.userID, d.TargetUserID) {
 			return
 		}
 		c.hub.SendToUser(d.TargetUserID, WSEvent{

@@ -270,8 +270,9 @@ func (h *Handler) JoinWithInvite(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusNotFound, "invite not found")
 		return
 	}
-	if inv.MaxUses > 0 && inv.Uses >= inv.MaxUses {
-		errResp(w, http.StatusForbidden, "invite has been used up")
+	// Fix #5: Check both use count and expiry via IsInviteValid.
+	if !h.db.IsInviteValid(inv) {
+		errResp(w, http.StatusForbidden, "invite is no longer valid")
 		return
 	}
 	// Return invite info so frontend can show register form
@@ -286,6 +287,11 @@ func (h *Handler) JoinWithInvite(w http.ResponseWriter, r *http.Request) {
 // --- Settings ---
 
 func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
+	// Fix #12: Settings are admin-only — they expose operational configuration.
+	_, isAdmin := h.requireAdmin(w, r)
+	if !isAdmin {
+		return
+	}
 	settings, err := h.db.GetAllSettings()
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to get settings")

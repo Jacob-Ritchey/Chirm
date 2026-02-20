@@ -6,8 +6,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// Fix #11: Only allow safe, unambiguous characters in usernames.
+var validUsername = regexp.MustCompile(`^[a-zA-Z0-9_.\-]{2,32}$`)
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -79,6 +83,11 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, "username must be 2-32 characters")
 		return
 	}
+	// Fix #11: Restrict username to safe characters only.
+	if !validUsername.MatchString(req.Username) {
+		errResp(w, http.StatusBadRequest, "username may only contain letters, numbers, _ . -")
+		return
+	}
 
 	// Check invite requirement
 	if requireInvite == "1" {
@@ -91,8 +100,9 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 			errResp(w, http.StatusForbidden, "invalid invite code")
 			return
 		}
-		if inv.MaxUses > 0 && inv.Uses >= inv.MaxUses {
-			errResp(w, http.StatusForbidden, "invite code has been used up")
+		// Fix #5: IsInviteValid checks both max uses and expiry.
+		if !h.db.IsInviteValid(inv) {
+			errResp(w, http.StatusForbidden, "invite code is no longer valid")
 			return
 		}
 		h.db.UseInvite(req.InviteCode)
@@ -126,10 +136,13 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
-		Name:   "chirm_token",
-		Value:  "",
-		Path:   "/",
-		MaxAge: -1,
+		Name:     "chirm_token",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
 	})
 	ok(w, map[string]string{"message": "logged out"})
 }

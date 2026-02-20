@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -595,7 +596,8 @@ func (d *DB) LinkAttachment(attachmentID, messageID string) error {
 // --- Invites ---
 
 func (d *DB) CreateInvite(createdBy string, maxUses int, expiresAt *time.Time) (*Invite, error) {
-	code := NewID()[:8]
+	// Fix #10: Use full 16-char hex code (64-bit entropy) instead of 8-char (32-bit).
+	code := NewID()
 	if expiresAt != nil {
 		_, err := d.Exec(`INSERT INTO invites (code, created_by, max_uses, expires_at) VALUES (?, ?, ?, ?)`,
 			code, createdBy, maxUses, expiresAt)
@@ -652,7 +654,47 @@ func (d *DB) UseInvite(code string) error {
 	return err
 }
 
+// IsInviteValid returns true if the invite has not exceeded its use limit
+// and has not passed its expiry time. Fix #5: expiry was stored but never checked.
+func (d *DB) IsInviteValid(inv *Invite) bool {
+	if inv.MaxUses > 0 && inv.Uses >= inv.MaxUses {
+		return false
+	}
+	if inv.ExpiresAt != nil && time.Now().After(*inv.ExpiresAt) {
+		return false
+	}
+	return true
+}
+
 func (d *DB) DeleteInvite(code string) error {
 	_, err := d.Exec(`DELETE FROM invites WHERE code = ?`, code)
 	return err
+}
+
+// CleanOrphanedAttachments deletes attachment records (and their files on disk)
+// that were never linked to a message and are older than maxAge.
+// Fix #9: prevents unbounded disk growth from abandoned uploads.
+func (d *DB) CleanOrphanedAttachments(uploadsDir string, maxAge time.Duration) error {
+	cutoff := time.Now().Add(-maxAge)
+	rows, err := d.Query(
+		`SELECT id, filename FROM attachments WHERE message_id IS NULL AND created_at < ?`, cutoff)
+	if err != nil {
+		return err
+	}
+
+	type orphan struct{ id, filename string }
+	var orphans []orphan
+	for rows.Next() {
+		var o orphan
+		if rows.Scan(&o.id, &o.filename) == nil {
+			orphans = append(orphans, o)
+		}
+	}
+	rows.Close()
+
+	for _, o := range orphans {
+		d.Exec(`DELETE FROM attachments WHERE id = ?`, o.id)
+		os.Remove(uploadsDir + "/" + o.filename)
+	}
+	return nil
 }

@@ -91,6 +91,7 @@ func setTokenCookie(w http.ResponseWriter, token string) {
 		Path:     "/",
 		MaxAge:   30 * 24 * 3600,
 		HttpOnly: true,
+		Secure:   true, // Fix #8: only transmit over HTTPS, prevents LAN interception
 		SameSite: http.SameSiteLaxMode,
 	})
 }
