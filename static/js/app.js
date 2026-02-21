@@ -12,6 +12,8 @@ const App = {
   typingUsers: {},       // channelId → {userId: timestamp}
   voiceParticipants: {},  // channelId → Set of userIds
   token: null,
+  replyTo: null,         // {id, content, authorName} | null
+  customEmojis: [],      // [{id, name, filename, ...}]
 };
 
 // ─── API ──────────────────────────────────────────────────────────────────────
@@ -80,12 +82,116 @@ function formatSize(bytes) {
 }
 
 function renderContent(content) {
-  // Basic markdown-lite: **bold**, *italic*, `code`, URLs
-  return esc(content)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-    .replace(/(https?:\/\/[^\s<>"']+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:var(--text-link)">$1</a>');
+  // ── Step 0: extract fenced code blocks to protect them from other transforms
+  const codeBlocks = [];
+  let s = content.replace(/```([a-zA-Z]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(`<pre class="msg-codeblock" data-lang="${esc(lang)}">${esc(code.trim())}</pre>`);
+    return `\x00CB${idx}\x00`;
+  });
+
+  // ── Step 1: escape HTML in the remaining text
+  s = esc(s);
+
+  // Re-escape the placeholders that got double-escaped
+  s = s.replace(/\x00CB(\d+)\x00/g, (_, i) => codeBlocks[parseInt(i)]);
+
+  // ── Step 2: custom emoji :name: substitution (custom first, then shortcodes)
+  s = s.replace(/:([a-zA-Z0-9_]+):/g, (match, name) => {
+    // Check custom server emojis
+    const custom = App.customEmojis?.find(e => e.name === name.toLowerCase());
+    if (custom) {
+      return `<img class="custom-emoji" src="/uploads/${esc(custom.filename)}" alt=":${esc(name)}:" title=":${esc(name)}:">`;
+    }
+    // Check standard shortcodes
+    const std = EMOJI_SHORTCODES[name] || EMOJI_SHORTCODES[name.toLowerCase()];
+    if (std) return std;
+    return match; // unchanged
+  });
+
+  // ── Step 3: inline images  ![alt](url)
+  s = s.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_, alt, url) => `<img class="msg-inline-img" src="${url}" alt="${esc(alt)}" loading="lazy" onclick="openImageViewer('${url}')">`);
+
+  // ── Step 4: blockquotes
+  s = s.replace(/^&gt; ?(.*)$/gm, '<div class="msg-blockquote">$1</div>');
+
+  // ── Step 5: headers
+  s = s.replace(/^### (.+)$/gm, '<h3 class="msg-h3 msg-h">$1</h3>');
+  s = s.replace(/^## (.+)$/gm,  '<h2 class="msg-h2 msg-h">$1</h2>');
+  s = s.replace(/^# (.+)$/gm,   '<h1 class="msg-h1 msg-h">$1</h1>');
+
+  // ── Step 6: horizontal rule  --- or *** or ___
+  s = s.replace(/^(?:-{3,}|\*{3,}|_{3,})\s*$/gm, '<hr class="msg-hr">');
+
+  // ── Step 7: task list items  - [ ] / - [x]
+  s = s.replace(/^- \[( |x)\] (.*)$/gm, (_, checked, text) => {
+    const ch = checked === 'x' ? 'checked' : '';
+    return `<div class="msg-task"><input type="checkbox" ${ch} disabled> ${text}</div>`;
+  });
+
+  // ── Step 8: unordered list items  - item  or  * item  (not task list)
+  s = s.replace(/^[ \t]*[-*] (.+)$/gm, '<li class="msg-li">$1</li>');
+
+  // ── Step 9: ordered list items  1. item
+  s = s.replace(/^[ \t]*\d+\. (.+)$/gm, '<li class="msg-oli">$1</li>');
+
+  // ── Step 10: wrap consecutive <li> into <ul>/<ol>
+  s = s.replace(/(<li class="msg-li">[\s\S]*?<\/li>)(?![\s\S]*?<li class="msg-li">)/g, '<ul class="msg-ul">$1</ul>');
+  s = s.replace(/(<li class="msg-oli">[\s\S]*?<\/li>)(?![\s\S]*?<li class="msg-oli">)/g, '<ol class="msg-ol">$1</ol>');
+  // Group consecutive lis
+  s = s.replace(/(<li class="msg-li">.*?<\/li>)\n(<li class="msg-li">)/g, '$1$2');
+  s = s.replace(/(<li class="msg-oli">.*?<\/li>)\n(<li class="msg-oli">)/g, '$1$2');
+
+  // ── Step 11: tables  | col | col |
+  s = s.replace(/(\|.+\|\n)((?:\|[-: ]+\|\n))(\|.+\|\n?)+/g, (table) => {
+    const rows = table.trim().split('\n').filter(r => r.trim());
+    if (rows.length < 2) return table;
+    const parseRow = r => r.split('|').slice(1, -1).map(c => c.trim());
+    const headerCells = parseRow(rows[0]);
+    const isSep = rows[1] && /^\|[-| :]+\|/.test(rows[1]);
+    if (!isSep) return table;
+    const align = parseRow(rows[1]).map(c => {
+      if (c.startsWith(':') && c.endsWith(':')) return 'center';
+      if (c.endsWith(':')) return 'right';
+      return 'left';
+    });
+    const bodyRows = rows.slice(2);
+    const thead = `<tr>${headerCells.map((c,i) => `<th style="text-align:${align[i]||'left'}">${c}</th>`).join('')}</tr>`;
+    const tbody = bodyRows.map(r => {
+      const cells = parseRow(r);
+      return `<tr>${cells.map((c,i) => `<td style="text-align:${align[i]||'left'}">${c}</td>`).join('')}</tr>`;
+    }).join('');
+    return `<table class="msg-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table>`;
+  });
+
+  // ── Step 12: inline code  `code`
+  s = s.replace(/`([^`\n]+)`/g, '<code class="msg-inlinecode">$1</code>');
+
+  // ── Step 13: bold+italic ***
+  s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  s = s.replace(/___(.+?)___/g, '<strong><em>$1</em></strong>');
+  // Bold
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  // Italic
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  s = s.replace(/_([^_\s][^_]*)_/g, '<em>$1</em>');
+  // Strikethrough
+  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+
+  // ── Step 14: URLs (not already in href/src)
+  s = s.replace(/(?<!href="|src="|">)(https?:\/\/[^\s<>"')\]]+)/g,
+    '<a href="$1" target="_blank" rel="noopener" style="color:var(--text-link)">$1</a>');
+
+  // ── Step 15: newlines → <br> (skipping inside block-level tags)
+  s = s.replace(/\n/g, '<br>');
+  // Clean stray <br> around block elements
+  const BLOCK = 'pre|ul|ol|li|div|hr|h[1-6]|table|thead|tbody|tr|th|td|blockquote';
+  s = s.replace(new RegExp(`<br>(</?(?:${BLOCK})[^>]*>)`, 'g'), '$1');
+  s = s.replace(new RegExp(`(</?(?:${BLOCK})[^>]*>)<br>`, 'g'), '$1');
+
+  return s;
 }
 
 function isAdmin(user) {
@@ -113,7 +219,7 @@ async function init() {
   }
 
   // Load data
-  await Promise.all([loadChannels(), loadMembers(), loadRoles(), loadVoiceRooms()]);
+  await Promise.all([loadChannels(), loadMembers(), loadRoles(), loadVoiceRooms(), loadCustomEmojis()]);
 
   // Render UI
   renderServerHeader();
@@ -159,6 +265,10 @@ async function loadVoiceRooms() {
   for (const [channelId, userIds] of Object.entries(data.rooms)) {
     App.voiceParticipants[channelId] = new Set(userIds);
   }
+}
+
+async function loadCustomEmojis() {
+  App.customEmojis = await api.get('/api/emojis').catch(() => []);
 }
 
 async function loadMessages(channelId, before = null) {
@@ -408,34 +518,114 @@ function renderMessage(msg, continued = false) {
   const canEdit = msg.user_id === App.user?.id;
   const canDelete = msg.user_id === App.user?.id || isAdmin(App.user);
 
+  // Reply reference
+  let replyHtml = '';
+  if (msg.reply_to) {
+    replyHtml = `<div class="msg-reply-ref" onclick="scrollToMessage('${msg.reply_to.id}')">
+      <span class="msg-reply-icon">↩</span>
+      <span class="msg-reply-author">${escInline(msg.reply_to.author_name)}</span>
+      <span class="msg-reply-content">${escInline(msg.reply_to.content)}</span>
+    </div>`;
+  }
+
+  // Attachments
   let attachmentsHtml = '';
   if (msg.attachments?.length) {
     attachmentsHtml = msg.attachments.map(att => {
       if (att.mime_type.startsWith('image/')) {
-        return `<div class="msg-attachment"><img src="/uploads/${esc(att.filename)}" alt="${esc(att.original_name)}" onclick="openImageViewer(this.src)" loading="lazy"></div>`;
+        return `<div class="msg-attachment"><img src="/uploads/${escInline(att.filename)}" alt="${escInline(att.original_name)}" onclick="openImageViewer(this.src)" loading="lazy"></div>`;
       }
-      return `<div class="msg-attachment"><a class="msg-file-attachment" href="/uploads/${esc(att.filename)}" target="_blank" download="${esc(att.original_name)}">📎 ${esc(att.original_name)} <span class="text-muted text-sm">${formatSize(att.size)}</span></a></div>`;
+      if (att.mime_type.startsWith('video/')) {
+        return `<div class="msg-attachment"><video src="/uploads/${escInline(att.filename)}" controls preload="metadata" style="max-width:400px;max-height:300px;border-radius:var(--radius)"></video></div>`;
+      }
+      return `<div class="msg-attachment"><a class="msg-file-attachment" href="/uploads/${escInline(att.filename)}" target="_blank" download="${escInline(att.original_name)}">📎 ${escInline(att.original_name)} <span class="text-muted text-sm">${formatSize(att.size)}</span></a></div>`;
     }).join('');
   }
 
+  // Reactions
+  const reactionsHtml = renderReactions(msg);
+
+  // Floating action toolbar
+  const msgIdSafe = msg.id;
+  const authorNameEsc = authorName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const contentPreview = (msg.content || '').slice(0, 80).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const toolbar = `<div class="msg-toolbar">
+    <button class="msg-toolbar-btn" title="React" onclick="openEmojiPicker(event, '${msgIdSafe}')">😊</button>
+    <button class="msg-toolbar-btn" title="Reply" onclick="setReply('${msgIdSafe}', '${authorNameEsc}', '${contentPreview}')">↩</button>
+    ${canEdit ? `<button class="msg-toolbar-btn" title="Edit" onclick="editMessage('${msgIdSafe}')">✎</button>` : ''}
+    ${canDelete ? `<button class="msg-toolbar-btn danger" title="Delete" onclick="deleteMessage('${msgIdSafe}')">🗑</button>` : ''}
+  </div>`;
+
   el.innerHTML = `
-    <div class="msg-avatar">${avatar(msg.author, 'avatar-sm')}</div>
+    ${toolbar}
+    <div class="msg-avatar-col">${!continued ? avatar(msg.author, 'avatar-sm') : `<span class="msg-time-hover">${formatTimeShort(msg.created_at)}</span>`}</div>
     <div class="msg-body">
+      ${replyHtml}
       ${!continued ? `<div class="msg-header">
-        <span class="msg-author" style="color:${authorColor}">${esc(authorName)}</span>
+        <span class="msg-author" style="color:${authorColor}">${escInline(authorName)}</span>
         <span class="msg-timestamp">${formatTime(msg.created_at)}</span>
         ${msg.edited_at ? '<span class="msg-edited">(edited)</span>' : ''}
       </div>` : ''}
       <div class="msg-content">${renderContent(msg.content)}</div>
       ${attachmentsHtml}
-    </div>
-    <div class="msg-actions">
-      ${canEdit ? `<button onclick="editMessage('${msg.id}')" title="Edit">✎</button>` : ''}
-      ${canDelete ? `<button class="danger" onclick="deleteMessage('${msg.id}')" title="Delete">🗑</button>` : ''}
+      ${reactionsHtml}
     </div>
   `;
 
   return el;
+}
+
+// Safe inline escaping for use inside HTML attributes within template literals
+function escInline(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function renderReactions(msg) {
+  if (!msg.reactions?.length) return '';
+  const btns = msg.reactions.map(r => {
+    const reacted = r.user_ids?.includes(App.user?.id);
+    const names = (r.user_ids || []).map(uid => App.members.find(m => m.id === uid)?.username || 'Unknown').join(', ');
+    return `<button class="reaction-btn${reacted ? ' reacted' : ''}" 
+      onclick="toggleReaction('${msg.id}', '${escInline(r.emoji)}')" 
+      title="${escInline(names)}">
+      ${r.emoji} <span>${r.count}</span>
+    </button>`;
+  }).join('');
+  return `<div class="msg-reactions">${btns}<button class="reaction-add-btn" title="Add reaction" onclick="openEmojiPicker(event, '${msg.id}')">+</button></div>`;
+}
+
+function updateReactionsInDOM(messageId, reactions) {
+  const channelId = App.currentChannel?.id;
+  if (channelId && App.messages[channelId]) {
+    const msg = App.messages[channelId].find(m => m.id === messageId);
+    if (msg) msg.reactions = reactions;
+  }
+  const el = document.querySelector(`[data-message-id="${messageId}"]`);
+  if (!el) return;
+  const msgs = App.messages[App.currentChannel?.id] || [];
+  const msg = msgs.find(m => m.id === messageId);
+  if (!msg) return;
+  const existing = el.querySelector('.msg-reactions');
+  const html = renderReactions(msg);
+  if (existing) {
+    existing.outerHTML = html || '<span></span>';
+  } else {
+    const body = el.querySelector('.msg-body');
+    if (body && html) body.insertAdjacentHTML('beforeend', html);
+  }
+}
+
+function formatTimeShort(dateStr) {
+  return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function scrollToMessage(id) {
+  const el = document.querySelector(`[data-message-id="${id}"]`);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('msg-highlight');
+    setTimeout(() => el.classList.remove('msg-highlight'), 1500);
+  }
 }
 
 async function loadMoreMessages(channelId) {
@@ -473,21 +663,265 @@ async function sendMessage() {
   input.value = '';
   resizeInput(input);
 
+  const replyToId = App.replyTo?.id || null;
+  clearReply();
+
   try {
-    const body = { content };
+    const body = { content, reply_to_id: replyToId };
     if (pendingUpload) {
       body.attachments = [pendingUpload.id];
       clearUploadPreview();
     }
-    const msg = await api.post(`/api/channels/${App.currentChannel.id}/messages`, body);
-    // Message will come through WebSocket, no need to add manually
+    await api.post(`/api/channels/${App.currentChannel.id}/messages`, body);
   } catch (e) {
     toast(e.message, 'error');
     input.value = content;
   }
 }
 
-// ─── EDIT / DELETE MESSAGES ───────────────────────────────────────────────────
+// ─── REPLY ────────────────────────────────────────────────────────────────────
+function setReply(msgId, authorName, contentPreview) {
+  App.replyTo = { id: msgId, authorName, content: contentPreview };
+  const bar = document.getElementById('reply-bar');
+  bar.style.display = 'flex';
+  bar.querySelector('.reply-bar-author').textContent = authorName;
+  bar.querySelector('.reply-bar-content').textContent = contentPreview || 'Click to jump to message';
+  document.getElementById('message-input').focus();
+}
+
+function clearReply() {
+  App.replyTo = null;
+  const bar = document.getElementById('reply-bar');
+  if (bar) bar.style.display = 'none';
+}
+
+// ─── REACTIONS ────────────────────────────────────────────────────────────────
+async function toggleReaction(messageId, emoji) {
+  const msg = (App.messages[App.currentChannel?.id] || []).find(m => m.id === messageId);
+  const reaction = msg?.reactions?.find(r => r.emoji === emoji);
+  const alreadyReacted = reaction?.user_ids?.includes(App.user?.id);
+
+  try {
+    if (alreadyReacted) {
+      await api.del(`/api/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`);
+    } else {
+      await api.post(`/api/messages/${messageId}/reactions`, { emoji });
+    }
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+// ─── EMOJI PICKER ─────────────────────────────────────────────────────────────
+// ─── EMOJI SYSTEM ────────────────────────────────────────────────────────────
+// EMOJI_DATA and EMOJI_CATEGORY_ICONS are loaded from emoji-data.js
+// App.customEmojis is populated on init and updated via WS
+
+let activeEmojiPickerMsgId = null;  // null = input mode, string = reaction mode
+let activeEmojiPickerEl = null;
+let emojiPickerMode = 'input'; // 'input' | 'reaction'
+
+function buildEmojiPicker(mode, targetMsgId) {
+  closeEmojiPicker();
+  emojiPickerMode = mode;
+  activeEmojiPickerMsgId = targetMsgId || null;
+
+  const picker = document.createElement('div');
+  picker.id = 'emoji-picker';
+  picker.className = 'emoji-picker';
+
+  // Build category list: Custom first (if any), then standard
+  const customEmojis = App.customEmojis || [];
+  const categories = [];
+  if (customEmojis.length > 0) {
+    categories.push({ key: 'Custom', emojis: null, custom: true });
+  }
+  Object.keys(EMOJI_DATA).forEach(cat => categories.push({ key: cat, emojis: EMOJI_DATA[cat], custom: false }));
+
+  const activeKey = categories[0]?.key || 'Smileys & Emotion';
+
+  // Tab bar
+  const tabBar = document.createElement('div');
+  tabBar.className = 'emoji-picker-tabs';
+  tabBar.innerHTML = categories.map((cat, i) => {
+    const icon = cat.custom ? '⭐' : (EMOJI_CATEGORY_ICONS[cat.key] || cat.key[0]);
+    return `<button class="emoji-tab${i===0?' active':''}" data-cat="${cat.key}" 
+      title="${cat.key}"
+      onclick="event.stopPropagation(); switchEmojiTab(this)">${icon}</button>`;
+  }).join('');
+  picker.appendChild(tabBar);
+
+  // Search box
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'emoji-search-wrap';
+  searchWrap.innerHTML = `<input type="text" class="emoji-search" placeholder="Search emojis…" oninput="filterEmojis(this.value)" onclick="event.stopPropagation()">`;
+  picker.appendChild(searchWrap);
+
+  // Body panels
+  const body = document.createElement('div');
+  body.className = 'emoji-picker-body';
+
+  categories.forEach((cat, i) => {
+    const panel = document.createElement('div');
+    panel.className = `emoji-category${i===0?' active':''}`;
+    panel.dataset.cat = cat.key;
+
+    if (cat.custom) {
+      // Custom emoji grid with image thumbnails
+      panel.innerHTML = customEmojis.map(e =>
+        `<button class="emoji-btn emoji-btn-custom" onclick="event.stopPropagation(); selectEmoji(':${e.name}:');" title=":${e.name}:">
+          <img src="/uploads/${e.filename}" alt="${e.name}">
+          <span>${e.name}</span>
+        </button>`
+      ).join('');
+    } else {
+      panel.innerHTML = cat.emojis.map(e =>
+        `<button class="emoji-btn" onclick="event.stopPropagation(); selectEmoji('${e}');" title="${e}">${e}</button>`
+      ).join('');
+    }
+
+    body.appendChild(panel);
+  });
+
+  // Search results panel (hidden by default)
+  const searchPanel = document.createElement('div');
+  searchPanel.className = 'emoji-category';
+  searchPanel.id = 'emoji-search-results';
+  searchPanel.style.display = 'none';
+  body.appendChild(searchPanel);
+
+  picker.appendChild(body);
+  document.body.appendChild(picker);
+  activeEmojiPickerEl = picker;
+
+  setTimeout(() => document.addEventListener('click', closeEmojiPicker, { once: true }), 10);
+  return picker;
+}
+
+function openEmojiPicker(event, messageId) {
+  event.stopPropagation();
+  const picker = buildEmojiPicker('reaction', messageId);
+  positionPicker(picker, event.currentTarget, false);
+}
+
+function openInputEmojiPicker(event) {
+  event.stopPropagation();
+  const picker = buildEmojiPicker('input', null);
+  positionPicker(picker, event.currentTarget, true);
+}
+
+function positionPicker(picker, anchor, preferLeft) {
+  const rect = anchor.getBoundingClientRect();
+  const pickerW = 300, pickerH = 300;
+  let top = rect.top - pickerH - 8;
+  let left = preferLeft ? rect.right - pickerW : rect.left;
+  if (top < 8) top = rect.bottom + 8;
+  if (left + pickerW > window.innerWidth - 8) left = window.innerWidth - pickerW - 8;
+  if (left < 8) left = 8;
+  picker.style.top = `${top}px`;
+  picker.style.left = `${left}px`;
+}
+
+function switchEmojiTab(btn) {
+  const cat = btn.dataset.cat;
+  document.querySelectorAll('.emoji-tab').forEach(t => t.classList.toggle('active', t === btn));
+  document.querySelectorAll('.emoji-category').forEach(c => {
+    if (c.id === 'emoji-search-results') { c.style.display = 'none'; return; }
+    c.classList.toggle('active', c.dataset.cat === cat);
+  });
+  // Clear search when switching tabs
+  const searchEl = document.querySelector('.emoji-search');
+  if (searchEl) { searchEl.value = ''; }
+}
+
+function filterEmojis(query) {
+  const resultsPanel = document.getElementById('emoji-search-results');
+  if (!resultsPanel) return;
+
+  if (!query.trim()) {
+    resultsPanel.style.display = 'none';
+    resultsPanel.innerHTML = '';
+    // Re-show active category
+    document.querySelectorAll('.emoji-category:not(#emoji-search-results)').forEach(c => {
+      c.classList.toggle('active', c.classList.contains('active') || false);
+    });
+    // Restore proper active state
+    const activeTab = document.querySelector('.emoji-tab.active');
+    if (activeTab) switchEmojiTab(activeTab);
+    return;
+  }
+
+  // Hide all category panels
+  document.querySelectorAll('.emoji-category:not(#emoji-search-results)').forEach(c => c.classList.remove('active'));
+
+  // Search standard emojis
+  const q = query.toLowerCase();
+  const hits = [];
+
+  // Custom emojis matching name
+  (App.customEmojis || []).forEach(e => {
+    if (e.name.includes(q)) {
+      hits.push(`<button class="emoji-btn emoji-btn-custom" onclick="event.stopPropagation(); selectEmoji(':${e.name}:');" title=":${e.name}:">
+        <img src="/uploads/${e.filename}" alt="${e.name}"><span>${e.name}</span></button>`);
+    }
+  });
+
+  // Shortcode search
+  Object.entries(EMOJI_SHORTCODES).forEach(([name, emoji]) => {
+    if (name.includes(q)) {
+      hits.push(`<button class="emoji-btn" onclick="event.stopPropagation(); selectEmoji('${emoji}');" title=":${name}: ${emoji}">${emoji}</button>`);
+    }
+  });
+
+  // Search all standard emoji categories (just emit first 60 hits)
+  let count = hits.length;
+  for (const [, emojis] of Object.entries(EMOJI_DATA)) {
+    if (count >= 80) break;
+    for (const e of emojis) {
+      // We can only search by character itself since we have no name index — skip
+    }
+  }
+
+  resultsPanel.style.display = 'flex';
+  resultsPanel.style.flexWrap = 'wrap';
+  resultsPanel.style.gap = '1px';
+  resultsPanel.style.padding = '6px';
+  resultsPanel.style.maxHeight = '220px';
+  resultsPanel.style.overflowY = 'auto';
+  resultsPanel.innerHTML = hits.length
+    ? hits.join('')
+    : '<span style="color:var(--text-muted);font-size:13px;padding:12px">No results</span>';
+}
+
+async function selectEmoji(emoji) {
+  // emoji is either a unicode char or ':name:' for custom
+  if (emojiPickerMode === 'reaction' && activeEmojiPickerMsgId) {
+    closeEmojiPicker();
+    await toggleReaction(activeEmojiPickerMsgId, emoji);
+    activeEmojiPickerMsgId = null;
+  } else {
+    closeEmojiPicker();
+    insertEmoji(emoji);
+  }
+}
+
+function closeEmojiPicker() {
+  if (activeEmojiPickerEl) {
+    activeEmojiPickerEl.remove();
+    activeEmojiPickerEl = null;
+  }
+}
+
+function insertEmoji(emoji) {
+  const input = document.getElementById('message-input');
+  const start = input.selectionStart;
+  const end = input.selectionEnd;
+  const val = input.value;
+  input.value = val.slice(0, start) + emoji + val.slice(end);
+  input.selectionStart = input.selectionEnd = start + emoji.length;
+  input.focus();
+  resizeInput(input);
+}
 function editMessage(id) {
   const el = document.querySelector(`[data-message-id="${id}"] .msg-content`);
   if (!el) return;
@@ -864,6 +1298,26 @@ function setupWSHandlers() {
     if (el) el.remove();
   });
 
+  WS.on('reaction.update', ({ message_id, channel_id, reactions }) => {
+    if (App.messages[channel_id]) {
+      const msg = App.messages[channel_id].find(m => m.id === message_id);
+      if (msg) msg.reactions = reactions;
+    }
+    if (App.currentChannel?.id === channel_id) {
+      updateReactionsInDOM(message_id, reactions);
+    }
+  });
+
+  WS.on('emoji.new', (emoji) => {
+    if (!App.customEmojis.find(e => e.id === emoji.id)) {
+      App.customEmojis.push(emoji);
+    }
+  });
+
+  WS.on('emoji.delete', ({ id }) => {
+    App.customEmojis = App.customEmojis.filter(e => e.id !== id);
+  });
+
   WS.on('channel.new', (ch) => {
     App.channels.push(ch);
     renderChannelList();
@@ -977,6 +1431,7 @@ async function loadAdminUsers() {
   renderAdminRoles(roles);
   renderAdminInvites(invites, settings);
   renderAdminSettings(settings);
+  await renderAdminEmojis();
 }
 
 function renderAdminUsers(users) {
@@ -1420,12 +1875,111 @@ async function logout() {
   window.location.href = '/login';
 }
 
+async function renderAdminEmojis() {
+  const el = document.getElementById('admin-emojis-list');
+  if (!el) return;
+
+  const emojis = await api.get('/api/emojis').catch(() => []);
+  App.customEmojis = emojis;
+
+  const slots = 48;
+  const used = emojis.length;
+  const remaining = slots - used;
+
+  el.innerHTML = `
+    <div style="margin-bottom:16px">
+      <label class="btn btn-primary btn-sm" style="cursor:pointer;display:inline-flex;align-items:center;gap:8px">
+        📤 Upload Emoji
+        <input type="file" id="emoji-upload-file" accept="image/png,image/gif,image/webp,image/jpeg" style="display:none" onchange="adminUploadEmojiSelect(this)">
+      </label>
+    </div>
+    <div id="emoji-upload-form" style="display:none;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+      <div class="form-group">
+        <label>Preview</label>
+        <img id="emoji-upload-preview" style="max-width:64px;max-height:64px;border-radius:var(--radius-sm);border:1px solid var(--border)" alt="preview">
+      </div>
+      <div class="form-group">
+        <label>Emoji Name <span style="color:var(--text-muted);font-size:12px">(used as :name:)</span></label>
+        <input type="text" id="emoji-upload-name" placeholder="e.g. hooray" style="text-transform:lowercase" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,'').toLowerCase()">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary btn-sm" onclick="adminDoUploadEmoji()">Upload</button>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('emoji-upload-form').style.display='none'">Cancel</button>
+      </div>
+    </div>
+    <h4 style="margin-bottom:8px;color:var(--text-secondary);font-size:13px">Emoji — <span style="color:${remaining < 10 ? 'var(--warning)' : 'var(--text-muted)'}">${used}/${slots} slots used</span></h4>
+    ${emojis.length ? `<table class="data-table">
+      <thead><tr><th>Image</th><th>Name</th><th>Uploaded By</th><th>Actions</th></tr></thead>
+      <tbody>${emojis.map(e => `
+        <tr>
+          <td><img src="/uploads/${esc(e.filename)}" style="width:32px;height:32px;object-fit:contain;border-radius:4px"></td>
+          <td><code style="font-family:'Space Mono',monospace;font-size:13px">:${esc(e.name)}:</code></td>
+          <td>${esc(e.uploader?.username || 'Unknown')}</td>
+          <td><button class="btn btn-sm btn-danger" onclick="adminDeleteEmoji('${e.id}','${esc(e.name)}')">Delete</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>` : '<p class="text-muted" style="font-size:13px">No custom emojis yet. Upload some!</p>'}
+  `;
+}
+
+let pendingEmojiFile = null;
+function adminUploadEmojiSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (file.size > 256 * 1024) { toast('Emoji image must be under 256KB', 'error'); return; }
+  pendingEmojiFile = file;
+  document.getElementById('emoji-upload-form').style.display = 'block';
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = document.getElementById('emoji-upload-preview');
+    if (img) img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  // Auto-fill name from filename
+  const nameInput = document.getElementById('emoji-upload-name');
+  if (nameInput && !nameInput.value) {
+    const stem = file.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase().slice(0, 32);
+    nameInput.value = stem;
+  }
+}
+
+async function adminDoUploadEmoji() {
+  if (!pendingEmojiFile) { toast('No file selected', 'error'); return; }
+  const name = document.getElementById('emoji-upload-name')?.value?.trim().toLowerCase();
+  if (!name) { toast('Name required', 'error'); return; }
+
+  const formData = new FormData();
+  formData.append('image', pendingEmojiFile);
+  formData.append('name', name);
+
+  try {
+    const res = await fetch('/api/emojis', { method: 'POST', credentials: 'include', body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    toast(`Emoji :${name}: uploaded!`, 'success');
+    pendingEmojiFile = null;
+    await renderAdminEmojis();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function adminDeleteEmoji(id, name) {
+  if (!confirm(`Delete emoji :${name}:? It will stop rendering in messages.`)) return;
+  try {
+    await api.del(`/api/emojis/${id}`);
+    toast(`Emoji :${name}: deleted`, 'success');
+    await renderAdminEmojis();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 // ─── ADMIN TAB SWITCHING ──────────────────────────────────────────────────────
 function switchAdminTab(tab) {
   document.querySelectorAll('.admin-tab').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.admin-pane').forEach(el => el.classList.remove('active'));
   document.querySelector(`.admin-tab[data-tab="${tab}"]`).classList.add('active');
   document.getElementById(`admin-pane-${tab}`).classList.add('active');
+  if (tab === 'emojis') renderAdminEmojis();
 }
 
 // ─── PANEL MANAGER ────────────────────────────────────────────────────────────

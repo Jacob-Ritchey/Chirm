@@ -57,6 +57,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content     string   `json:"content"`
 		Attachments []string `json:"attachments"` // attachment IDs
+		ReplyToID   *string  `json:"reply_to_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		errResp(w, http.StatusBadRequest, "invalid request")
@@ -73,7 +74,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg, err := h.db.CreateMessage(channelID, u.ID, req.Content)
+	msg, err := h.db.CreateMessage(channelID, u.ID, req.Content, req.ReplyToID)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to send message")
 		return
@@ -99,6 +100,74 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	h.hub.Broadcast(WSEvent{Type: "message.activity", Data: map[string]string{"channel_id": channelID}})
 
 	created(w, msg)
+}
+
+func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
+	u, err := h.currentUser(r)
+	if err != nil || u == nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	msgID := chi.URLParam(r, "id")
+	msg, err := h.db.GetMessageByID(msgID)
+	if err != nil {
+		errResp(w, http.StatusNotFound, "message not found")
+		return
+	}
+
+	var req struct {
+		Emoji string `json:"emoji"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Emoji == "" {
+		errResp(w, http.StatusBadRequest, "emoji required")
+		return
+	}
+
+	if err := h.db.AddReaction(msgID, u.ID, req.Emoji); err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to add reaction")
+		return
+	}
+
+	reactions, _ := h.db.GetReactions(msgID)
+	payload := map[string]interface{}{
+		"message_id": msgID,
+		"channel_id": msg.ChannelID,
+		"reactions":  reactions,
+	}
+	h.hub.BroadcastToChannel(msg.ChannelID, WSEvent{Type: "reaction.update", Data: payload})
+	ok(w, payload)
+}
+
+func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
+	u, err := h.currentUser(r)
+	if err != nil || u == nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	msgID := chi.URLParam(r, "id")
+	emoji := chi.URLParam(r, "emoji")
+
+	msg, err := h.db.GetMessageByID(msgID)
+	if err != nil {
+		errResp(w, http.StatusNotFound, "message not found")
+		return
+	}
+
+	if err := h.db.RemoveReaction(msgID, u.ID, emoji); err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to remove reaction")
+		return
+	}
+
+	reactions, _ := h.db.GetReactions(msgID)
+	payload := map[string]interface{}{
+		"message_id": msgID,
+		"channel_id": msg.ChannelID,
+		"reactions":  reactions,
+	}
+	h.hub.BroadcastToChannel(msg.ChannelID, WSEvent{Type: "reaction.update", Data: payload})
+	ok(w, payload)
 }
 
 func (h *Handler) EditMessage(w http.ResponseWriter, r *http.Request) {

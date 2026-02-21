@@ -112,11 +112,37 @@ CREATE TABLE IF NOT EXISTS invites (
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS reactions (
+	message_id TEXT NOT NULL,
+	user_id    TEXT NOT NULL,
+	emoji      TEXT NOT NULL,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (message_id, user_id, emoji),
+	FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+	FOREIGN KEY (user_id)    REFERENCES users(id)    ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS custom_emojis (
+	id          TEXT PRIMARY KEY,
+	name        TEXT UNIQUE NOT NULL,
+	filename    TEXT NOT NULL,
+	uploader_id TEXT NOT NULL,
+	created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+	FOREIGN KEY (uploader_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
+CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id);
+CREATE INDEX IF NOT EXISTS idx_custom_emojis_name ON custom_emojis(name);
 `
 	_, err := d.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+	// Idempotent column additions for existing DBs
+	d.Exec(`ALTER TABLE messages ADD COLUMN reply_to_id TEXT`)
+	return nil
 }
 
 // --- Helpers ---
@@ -159,15 +185,30 @@ type Channel struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type Reaction struct {
+	Emoji   string   `json:"emoji"`
+	Count   int      `json:"count"`
+	UserIDs []string `json:"user_ids"`
+}
+
+type MessageRef struct {
+	ID         string `json:"id"`
+	Content    string `json:"content"`
+	AuthorName string `json:"author_name"`
+}
+
 type Message struct {
 	ID          string       `json:"id"`
 	ChannelID   string       `json:"channel_id"`
 	UserID      string       `json:"user_id"`
 	Content     string       `json:"content"`
+	ReplyToID   *string      `json:"reply_to_id,omitempty"`
+	ReplyTo     *MessageRef  `json:"reply_to,omitempty"`
 	EditedAt    *time.Time   `json:"edited_at,omitempty"`
 	CreatedAt   time.Time    `json:"created_at"`
 	Author      *User        `json:"author,omitempty"`
 	Attachments []Attachment `json:"attachments,omitempty"`
+	Reactions   []Reaction   `json:"reactions,omitempty"`
 }
 
 type Attachment struct {
@@ -481,10 +522,10 @@ func (d *DB) DeleteChannel(id string) error {
 
 // --- Messages ---
 
-func (d *DB) CreateMessage(channelID, userID, content string) (*Message, error) {
+func (d *DB) CreateMessage(channelID, userID, content string, replyToID *string) (*Message, error) {
 	id := NewID()
-	_, err := d.Exec(`INSERT INTO messages (id, channel_id, user_id, content) VALUES (?, ?, ?, ?)`,
-		id, channelID, userID, content)
+	_, err := d.Exec(`INSERT INTO messages (id, channel_id, user_id, content, reply_to_id) VALUES (?, ?, ?, ?, ?)`,
+		id, channelID, userID, content, replyToID)
 	if err != nil {
 		return nil, err
 	}
@@ -494,17 +535,44 @@ func (d *DB) CreateMessage(channelID, userID, content string) (*Message, error) 
 func (d *DB) GetMessageByID(id string) (*Message, error) {
 	m := &Message{}
 	var editedAt sql.NullTime
-	err := d.QueryRow(`SELECT id, channel_id, user_id, content, edited_at, created_at FROM messages WHERE id = ?`, id).
-		Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &editedAt, &m.CreatedAt)
+	var replyToID sql.NullString
+	err := d.QueryRow(`SELECT id, channel_id, user_id, content, reply_to_id, edited_at, created_at FROM messages WHERE id = ?`, id).
+		Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &replyToID, &editedAt, &m.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	if editedAt.Valid {
 		m.EditedAt = &editedAt.Time
 	}
+	if replyToID.Valid {
+		m.ReplyToID = &replyToID.String
+		m.ReplyTo, _ = d.GetMessageRef(replyToID.String)
+	}
 	m.Author, _ = d.GetUserByID(m.UserID)
 	m.Attachments, _ = d.GetAttachments(m.ID)
+	m.Reactions, _ = d.GetReactions(m.ID)
 	return m, nil
+}
+
+func (d *DB) GetMessageRef(id string) (*MessageRef, error) {
+	ref := &MessageRef{ID: id}
+	var authorID string
+	err := d.QueryRow(`SELECT content, user_id FROM messages WHERE id = ?`, id).
+		Scan(&ref.Content, &authorID)
+	if err != nil {
+		return nil, err
+	}
+	u, _ := d.GetUserByID(authorID)
+	if u != nil {
+		ref.AuthorName = u.Username
+	} else {
+		ref.AuthorName = "Deleted User"
+	}
+	// Truncate for preview
+	if len(ref.Content) > 100 {
+		ref.Content = ref.Content[:97] + "..."
+	}
+	return ref, nil
 }
 
 func (d *DB) GetMessages(channelID string, before string, limit int) ([]Message, error) {
@@ -512,12 +580,12 @@ func (d *DB) GetMessages(channelID string, before string, limit int) ([]Message,
 	var err error
 	if before == "" {
 		rows, err = d.Query(`
-			SELECT id, channel_id, user_id, content, edited_at, created_at 
+			SELECT id, channel_id, user_id, content, reply_to_id, edited_at, created_at 
 			FROM messages WHERE channel_id = ?
 			ORDER BY created_at DESC LIMIT ?`, channelID, limit)
 	} else {
 		rows, err = d.Query(`
-			SELECT id, channel_id, user_id, content, edited_at, created_at 
+			SELECT id, channel_id, user_id, content, reply_to_id, edited_at, created_at 
 			FROM messages WHERE channel_id = ? AND created_at < (SELECT created_at FROM messages WHERE id = ?)
 			ORDER BY created_at DESC LIMIT ?`, channelID, before, limit)
 	}
@@ -530,12 +598,18 @@ func (d *DB) GetMessages(channelID string, before string, limit int) ([]Message,
 	for rows.Next() {
 		var m Message
 		var editedAt sql.NullTime
-		rows.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &editedAt, &m.CreatedAt)
+		var replyToID sql.NullString
+		rows.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &replyToID, &editedAt, &m.CreatedAt)
 		if editedAt.Valid {
 			m.EditedAt = &editedAt.Time
 		}
+		if replyToID.Valid {
+			m.ReplyToID = &replyToID.String
+			m.ReplyTo, _ = d.GetMessageRef(replyToID.String)
+		}
 		m.Author, _ = d.GetUserByID(m.UserID)
 		m.Attachments, _ = d.GetAttachments(m.ID)
+		m.Reactions, _ = d.GetReactions(m.ID)
 		msgs = append(msgs, m)
 	}
 	// Reverse so oldest first
@@ -591,6 +665,47 @@ func (d *DB) GetAttachments(messageID string) ([]Attachment, error) {
 func (d *DB) LinkAttachment(attachmentID, messageID string) error {
 	_, err := d.Exec(`UPDATE attachments SET message_id = ? WHERE id = ?`, messageID, attachmentID)
 	return err
+}
+
+// --- Reactions ---
+
+func (d *DB) AddReaction(messageID, userID, emoji string) error {
+	_, err := d.Exec(`INSERT OR IGNORE INTO reactions (message_id, user_id, emoji) VALUES (?, ?, ?)`,
+		messageID, userID, emoji)
+	return err
+}
+
+func (d *DB) RemoveReaction(messageID, userID, emoji string) error {
+	_, err := d.Exec(`DELETE FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?`,
+		messageID, userID, emoji)
+	return err
+}
+
+func (d *DB) GetReactions(messageID string) ([]Reaction, error) {
+	rows, err := d.Query(`SELECT emoji, user_id FROM reactions WHERE message_id = ? ORDER BY emoji, created_at`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byEmoji := map[string]*Reaction{}
+	order := []string{}
+	for rows.Next() {
+		var emoji, userID string
+		rows.Scan(&emoji, &userID)
+		if _, ok := byEmoji[emoji]; !ok {
+			byEmoji[emoji] = &Reaction{Emoji: emoji}
+			order = append(order, emoji)
+		}
+		byEmoji[emoji].Count++
+		byEmoji[emoji].UserIDs = append(byEmoji[emoji].UserIDs, userID)
+	}
+
+	result := make([]Reaction, 0, len(order))
+	for _, e := range order {
+		result = append(result, *byEmoji[e])
+	}
+	return result, nil
 }
 
 // --- Invites ---
@@ -697,4 +812,75 @@ func (d *DB) CleanOrphanedAttachments(uploadsDir string, maxAge time.Duration) e
 		os.Remove(uploadsDir + "/" + o.filename)
 	}
 	return nil
+}
+
+// --- Custom Emojis ---
+
+type CustomEmoji struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Filename   string    `json:"filename"`
+	UploaderID string    `json:"uploader_id"`
+	Uploader   *User     `json:"uploader,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func (d *DB) CreateCustomEmoji(name, filename, uploaderID string) (*CustomEmoji, error) {
+	id := NewID()
+	_, err := d.Exec(`INSERT INTO custom_emojis (id, name, filename, uploader_id) VALUES (?, ?, ?, ?)`,
+		id, name, filename, uploaderID)
+	if err != nil {
+		return nil, err
+	}
+	return d.GetCustomEmojiByID(id)
+}
+
+func (d *DB) GetCustomEmojiByID(id string) (*CustomEmoji, error) {
+	e := &CustomEmoji{}
+	err := d.QueryRow(`SELECT id, name, filename, uploader_id, created_at FROM custom_emojis WHERE id = ?`, id).
+		Scan(&e.ID, &e.Name, &e.Filename, &e.UploaderID, &e.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	e.Uploader, _ = d.GetUserByID(e.UploaderID)
+	return e, nil
+}
+
+func (d *DB) ListCustomEmojis() ([]CustomEmoji, error) {
+	rows, err := d.Query(`SELECT id, name, filename, uploader_id, created_at FROM custom_emojis ORDER BY name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var emojis []CustomEmoji
+	for rows.Next() {
+		var e CustomEmoji
+		rows.Scan(&e.ID, &e.Name, &e.Filename, &e.UploaderID, &e.CreatedAt)
+		e.Uploader, _ = d.GetUserByID(e.UploaderID)
+		emojis = append(emojis, e)
+	}
+	if emojis == nil {
+		emojis = []CustomEmoji{}
+	}
+	return emojis, nil
+}
+
+func (d *DB) DeleteCustomEmoji(id string) (string, error) {
+	var filename string
+	err := d.QueryRow(`SELECT filename FROM custom_emojis WHERE id = ?`, id).Scan(&filename)
+	if err != nil {
+		return "", err
+	}
+	_, err = d.Exec(`DELETE FROM custom_emojis WHERE id = ?`, id)
+	return filename, err
+}
+
+func (d *DB) GetCustomEmojiByName(name string) (*CustomEmoji, error) {
+	e := &CustomEmoji{}
+	err := d.QueryRow(`SELECT id, name, filename, uploader_id, created_at FROM custom_emojis WHERE name = ?`, name).
+		Scan(&e.ID, &e.Name, &e.Filename, &e.UploaderID, &e.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
 }

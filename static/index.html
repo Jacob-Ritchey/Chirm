@@ -77,6 +77,14 @@
 
     <div id="typing-indicator"></div>
 
+    <!-- Reply bar -->
+    <div id="reply-bar" style="display:none">
+      <span class="reply-bar-icon">↩ Replying to</span>
+      <span class="reply-bar-author"></span>
+      <span class="reply-bar-content"></span>
+      <button class="reply-bar-cancel" onclick="clearReply()" title="Cancel reply">✕</button>
+    </div>
+
     <!-- Upload preview strip -->
     <div id="upload-preview" style="display:none;padding:8px 16px 0;align-items:center;gap:10px;background:var(--bg-base)"></div>
 
@@ -84,6 +92,7 @@
       <form id="message-form">
         <input type="file" id="file-input" style="display:none" accept="image/*,video/*,audio/*,.pdf,.txt,.zip">
         <button type="button" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach file">📎</button>
+        <button type="button" id="emoji-btn" onclick="openInputEmojiPicker(event)" title="Insert emoji">😊</button>
         <textarea id="message-input" rows="1" placeholder="Select a channel first…"></textarea>
         <button type="submit" id="send-btn" title="Send message">➤</button>
       </form>
@@ -111,6 +120,7 @@
         <button class="admin-tab active" data-tab="users" onclick="switchAdminTab('users')">Users</button>
         <button class="admin-tab" data-tab="roles" onclick="switchAdminTab('roles')">Roles</button>
         <button class="admin-tab" data-tab="invites" onclick="switchAdminTab('invites')">Invites</button>
+        <button class="admin-tab" data-tab="emojis" onclick="switchAdminTab('emojis')">Emoji</button>
         <button class="admin-tab" data-tab="settings" onclick="switchAdminTab('settings')">Settings</button>
       </div>
 
@@ -126,6 +136,10 @@
         <div id="admin-invites-list">Loading…</div>
       </div>
 
+      <div id="admin-pane-emojis" class="admin-pane">
+        <div id="admin-emojis-list">Loading…</div>
+      </div>
+
       <div id="admin-pane-settings" class="admin-pane">
         <div id="admin-settings-form">Loading…</div>
       </div>
@@ -138,6 +152,7 @@
 
 <script src="/js/ws.js"></script>
 <script src="/js/voice.js"></script>
+<script src="/js/emoji-data.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

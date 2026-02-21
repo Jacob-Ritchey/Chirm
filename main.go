@@ -106,6 +106,12 @@ func main() {
 		r.Post("/api/channels/{id}/messages", h.SendMessage)
 		r.Put("/api/messages/{id}", h.EditMessage)
 		r.Delete("/api/messages/{id}", h.DeleteMessage)
+		r.Post("/api/messages/{id}/reactions", h.AddReaction)
+		r.Delete("/api/messages/{id}/reactions/{emoji}", h.RemoveReaction)
+
+		r.Get("/api/emojis", h.ListCustomEmojis)
+		r.Post("/api/emojis", h.UploadCustomEmoji)
+		r.Delete("/api/emojis/{id}", h.DeleteCustomEmoji)
 
 		r.Post("/api/upload", h.Upload)
 
