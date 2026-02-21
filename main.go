@@ -113,6 +113,8 @@ func main() {
 		r.Post("/api/emojis", h.UploadCustomEmoji)
 		r.Delete("/api/emojis/{id}", h.DeleteCustomEmoji)
 
+		r.Get("/api/link-preview", h.LinkPreview)
+
 		r.Post("/api/upload", h.Upload)
 
 		r.Get("/api/users", h.ListUsers)

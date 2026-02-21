@@ -180,9 +180,22 @@ function renderContent(content) {
   // Strikethrough
   s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
 
-  // ── Step 14: URLs (not already in href/src)
-  s = s.replace(/(?<!href="|src="|">)(https?:\/\/[^\s<>"')\]]+)/g,
-    '<a href="$1" target="_blank" rel="noopener" style="color:var(--text-link)">$1</a>');
+  // ── Step 14: URLs — match https?:// and bare www. addresses
+  // Track which URLs appear for preview generation (stored on rendered element via data attr)
+  const foundURLs = [];
+  s = s.replace(/(?<!href="|src="|">|:\/\/)(https?:\/\/[^\s<>"')\]]+|www\.[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s<>"')\]]*)/g,
+    (match) => {
+      const href = match.startsWith('http') ? match : `https://${match}`;
+      // Only collect first 2 unique http(s) URLs for previews
+      if (foundURLs.length < 2 && href.startsWith('http') && !foundURLs.includes(href)) {
+        foundURLs.push(href);
+      }
+      return `<a href="${href}" target="_blank" rel="noopener" class="msg-link">${match}</a>`;
+    });
+  // Encode collected URLs into a data attribute on a sentinel span for async preview
+  if (foundURLs.length > 0) {
+    s += `<span class="link-preview-trigger" data-urls="${escAttr(foundURLs.join('|'))}" style="display:none"></span>`;
+  }
 
   // ── Step 15: newlines → <br> (skipping inside block-level tags)
   s = s.replace(/\n/g, '<br>');
@@ -572,12 +585,124 @@ function renderMessage(msg, continued = false) {
     </div>
   `;
 
+  // Async: inject link preview cards for any URLs found during render
+  requestAnimationFrame(() => scheduleLinePreviews(el));
+
   return el;
+}
+
+// ─── LINK PREVIEWS ────────────────────────────────────────────────────────────
+const _previewCache = new Map(); // url → preview data (or null if failed/not interesting)
+const _previewInFlight = new Map(); // url → Promise
+
+// Media extensions we skip previews for
+const SKIP_PREVIEW_EXTS = /\.(png|jpe?g|gif|webp|svg|mp4|webm|ogg|mp3|wav|pdf|zip|tar|gz)(\?.*)?$/i;
+
+async function fetchLinkPreview(url) {
+  if (_previewCache.has(url)) return _previewCache.get(url);
+  if (_previewInFlight.has(url)) return _previewInFlight.get(url);
+
+  const promise = api.get(`/api/link-preview?url=${encodeURIComponent(url)}`)
+    .then(data => {
+      // Only store if it has meaningful content
+      const result = (data.title || data.description) ? data : null;
+      _previewCache.set(url, result);
+      _previewInFlight.delete(url);
+      return result;
+    })
+    .catch(() => {
+      _previewCache.set(url, null);
+      _previewInFlight.delete(url);
+      return null;
+    });
+
+  _previewInFlight.set(url, promise);
+  return promise;
+}
+
+function scheduleLinePreviews(msgEl) {
+  const trigger = msgEl.querySelector('.link-preview-trigger');
+  if (!trigger) return;
+  const urls = trigger.dataset.urls?.split('|').filter(Boolean) || [];
+  if (!urls.length) return;
+
+  // Only preview the first URL unless message is basically just a URL
+  const body = msgEl.querySelector('.msg-body');
+  if (!body) return;
+
+  // Try each URL in order; use first one that yields a useful preview
+  tryNextPreview(urls, 0, body);
+}
+
+async function tryNextPreview(urls, idx, body) {
+  if (idx >= urls.length) return;
+  const url = urls[idx];
+
+  // Skip media/document URLs immediately
+  if (SKIP_PREVIEW_EXTS.test(url)) {
+    tryNextPreview(urls, idx + 1, body);
+    return;
+  }
+
+  const data = await fetchLinkPreview(url);
+  if (!data || (!data.title && !data.description)) {
+    // Nothing useful — try next URL
+    tryNextPreview(urls, idx + 1, body);
+    return;
+  }
+
+  // Don't add if message element was removed from DOM
+  if (!document.body.contains(body)) return;
+
+  // Remove any existing preview for this message
+  body.querySelector('.link-preview-card')?.remove();
+
+  const card = buildPreviewCard(data);
+  // Insert before reactions (if any), else append
+  const reactions = body.querySelector('.msg-reactions');
+  if (reactions) {
+    body.insertBefore(card, reactions);
+  } else {
+    body.appendChild(card);
+  }
+}
+
+function buildPreviewCard(data) {
+  const card = document.createElement('a');
+  card.className = 'link-preview-card';
+  card.href = data.url;
+  card.target = '_blank';
+  card.rel = 'noopener';
+
+  const hasImage = data.image && !data.image.includes('favicon');
+  const siteLine = data.site_name ? `<span class="lp-site">${escInline(data.site_name)}</span>` : '';
+
+  // Favicon
+  const faviconHtml = data.favicon
+    ? `<img class="lp-favicon" src="${escInline(data.favicon)}" alt="" onerror="this.style.display='none'">`
+    : '';
+
+  card.innerHTML = `
+    <div class="lp-content">
+      <div class="lp-meta">${faviconHtml}${siteLine}</div>
+      ${data.title ? `<div class="lp-title">${escInline(data.title)}</div>` : ''}
+      ${data.description ? `<div class="lp-desc">${escInline(data.description)}</div>` : ''}
+      <div class="lp-url">${escInline(data.url.replace(/^https?:\/\//, '').slice(0, 60))}</div>
+    </div>
+    ${hasImage ? `<div class="lp-image"><img src="${escInline(data.image)}" alt="" loading="lazy" onerror="this.closest('.lp-image').remove()"></div>` : ''}
+  `;
+
+  return card;
 }
 
 // Safe inline escaping for use inside HTML attributes within template literals
 function escInline(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// Escape for use in a double-quoted HTML attribute (lighter version)
+function escAttr(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
 }
 
 function renderReactions(msg) {
@@ -1882,9 +2007,7 @@ async function renderAdminEmojis() {
   const emojis = await api.get('/api/emojis').catch(() => []);
   App.customEmojis = emojis;
 
-  const slots = 48;
   const used = emojis.length;
-  const remaining = slots - used;
 
   el.innerHTML = `
     <div style="margin-bottom:16px">
@@ -1907,7 +2030,7 @@ async function renderAdminEmojis() {
         <button class="btn btn-secondary btn-sm" onclick="document.getElementById('emoji-upload-form').style.display='none'">Cancel</button>
       </div>
     </div>
-    <h4 style="margin-bottom:8px;color:var(--text-secondary);font-size:13px">Emoji — <span style="color:${remaining < 10 ? 'var(--warning)' : 'var(--text-muted)'}">${used}/${slots} slots used</span></h4>
+    <h4 style="margin-bottom:8px;color:var(--text-secondary);font-size:13px">${used} custom emoji${used !== 1 ? 's' : ''}</h4>
     ${emojis.length ? `<table class="data-table">
       <thead><tr><th>Image</th><th>Name</th><th>Uploaded By</th><th>Actions</th></tr></thead>
       <tbody>${emojis.map(e => `

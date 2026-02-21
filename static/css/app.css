@@ -547,6 +547,108 @@ img.msg-inline-img {
 }
 .msg-file-attachment:hover { background: var(--bg-elevated); color: var(--text-primary); }
 
+/* ─── INLINE LINK STYLE ─── */
+.msg-link {
+  color: var(--text-link);
+  text-decoration: none;
+  word-break: break-all;
+}
+.msg-link:hover { text-decoration: underline; }
+
+/* ─── LINK PREVIEW CARD ─── */
+.link-preview-card {
+  display: flex;
+  gap: 0;
+  margin-top: 8px;
+  max-width: 480px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.12s, border-color 0.12s;
+  cursor: pointer;
+}
+.link-preview-card:hover {
+  background: var(--bg-elevated);
+  border-left-color: var(--accent-hover);
+}
+.lp-content {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.lp-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 1px;
+}
+.lp-favicon {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.lp-site {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lp-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+.lp-desc {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lp-url {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'Space Mono', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.lp-image {
+  flex-shrink: 0;
+  width: 96px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lp-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .load-more-btn {
   display: block; margin: 12px auto;
   background: none; border: 1px solid var(--border);
