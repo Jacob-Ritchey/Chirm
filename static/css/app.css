@@ -1834,6 +1834,7 @@ pre code { background: none; border: none; padding: 0; }
   transition: opacity 0.15s;
 }
 .channel-item:hover .drag-handle { opacity: 1; }
+.channel-category:hover .cat-drag-handle { opacity: 1; }
 .channel-item.dragging { opacity: 0.4; }
 .channel-item.drag-target {
   background: var(--bg-elevated);

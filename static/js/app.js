@@ -444,10 +444,11 @@ function renderChannelList() {
       <button class="channel-edit-btn" onclick="event.stopPropagation();openEditCategory('${catId}')" title="Rename">✎</button>
       <button class="channel-edit-btn" onclick="event.stopPropagation();confirmDeleteCategory('${catId}')" title="Delete" style="color:var(--danger)">✕</button>` : '';
     header.innerHTML = `
+      ${App.channelEditMode && admin ? `<span class="drag-handle cat-drag-handle" title="Drag to reorder">⠿</span>` : ''}
       <span class="cat-chevron">${collapsed ? '▸' : '▾'}</span>
       <span class="cat-name">${esc(catName)}</span>
       ${admin ? `<span class="cat-actions">${editBtns}
-        <button class="channel-edit-btn add-ch-btn" onclick="event.stopPropagation();openCreateChannel('${catId}')" title="Add Channel">+</button>
+        ${App.channelEditMode ? `<button class="channel-edit-btn add-ch-btn" onclick="event.stopPropagation();openCreateChannel('${catId}')" title="Add Channel">+</button>` : ''}
       </span>` : ''}
     `;
     header.addEventListener('click', () => toggleCategory(catId));
@@ -531,7 +532,7 @@ function renderChannelList() {
   header.innerHTML = `
     <span class="cat-chevron">${collapsed ? '▸' : '▾'}</span>
     <span class="cat-name">Channels</span>
-    ${admin && !App.channelEditMode ? `<span class="cat-actions"><button class="channel-edit-btn add-ch-btn" onclick="event.stopPropagation();openCreateChannel('')" title="Add Channel" style="margin-left:auto">+</button></span>` : ''}
+    ${admin && App.channelEditMode ? `<span class="cat-actions"><button class="channel-edit-btn add-ch-btn" onclick="event.stopPropagation();openCreateChannel('')" title="Add Channel" style="margin-left:auto">+</button></span>` : ''}
   `;
   header.addEventListener('click', () => toggleCategory('__uncategorized__'));
   section.appendChild(header);
