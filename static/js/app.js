@@ -291,7 +291,7 @@ async function loadMessages(channelId, before = null) {
 
 // ─── RENDER ───────────────────────────────────────────────────────────────────
 function renderServerHeader() {
-  const settings = api.get('/api/settings').then(s => {
+  api.get('/api/public-settings').then(s => {
     document.getElementById('server-name').textContent = s.server_name || 'Chirm';
     document.title = s.server_name || 'Chirm';
   }).catch(() => {});
@@ -1648,6 +1648,17 @@ function renderAdminSettings(settings) {
       <input type="text" id="setting-server-desc" value="${esc(settings.server_description||'')}">
     </div>
     <div class="form-group">
+      <label>Server Icon</label>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+        ${settings.server_icon ? `<img src="${esc(settings.server_icon)}" style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid var(--border)">` : `<div style="width:48px;height:48px;border-radius:50%;background:var(--bg-elevated);border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;font-size:20px">✦</div>`}
+        <div>
+          <input type="file" id="setting-server-icon-file" accept="image/*" style="display:none" onchange="uploadServerIcon()">
+          <button class="btn btn-sm btn-secondary" onclick="document.getElementById('setting-server-icon-file').click()">Upload Icon</button>
+          ${settings.server_icon ? `<button class="btn btn-sm btn-danger" style="margin-left:4px" onclick="clearServerIcon()">Remove</button>` : ''}
+        </div>
+      </div>
+    </div>
+    <div class="form-group">
       <label>Allow Registration</label>
       <select id="setting-allow-reg">
         <option value="1" ${settings.allow_registration==='1'?'selected':''}>Enabled</option>
@@ -1665,8 +1676,87 @@ function renderAdminSettings(settings) {
       <label>Max Upload Size (MB)</label>
       <input type="number" id="setting-max-upload" value="${settings.max_upload_mb||25}" min="1" max="500">
     </div>
+    <div style="border-top:1px solid var(--border);margin:20px 0;padding-top:20px">
+      <h4 style="margin-bottom:16px;font-size:14px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Login Page Appearance</h4>
+      <div class="form-group">
+        <label>Background Color <span style="font-weight:400;color:var(--text-muted)">(hex or CSS color)</span></label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="color" id="setting-bg-color-picker" value="${settings.login_bg_color||'#0d0d12'}" style="width:40px;height:36px;padding:2px;border-radius:var(--radius);border:1px solid var(--border);background:none;cursor:pointer" oninput="document.getElementById('setting-bg-color').value=this.value">
+          <input type="text" id="setting-bg-color" value="${esc(settings.login_bg_color||'')}" placeholder="#0d0d12 or transparent" style="flex:1" oninput="this.previousElementSibling.value=this.value">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Background Image</label>
+        ${settings.login_bg_image ? `<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px"><img src="${esc(settings.login_bg_image)}" style="height:48px;border-radius:var(--radius);object-fit:cover;max-width:120px"><button class="btn btn-sm btn-danger" onclick="clearLoginBg()">Remove</button></div>` : ''}
+        <input type="file" id="setting-login-bg-file" accept="image/*" style="display:none" onchange="uploadLoginBg()">
+        <button class="btn btn-sm btn-secondary" onclick="document.getElementById('setting-login-bg-file').click()">Upload Background Image</button>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:4px">If set, overrides the background color. Max 10MB.</p>
+      </div>
+      <div class="form-group">
+        <label>Background Image Overlay Opacity <span style="font-weight:400;color:var(--text-muted)">(0 = fully visible, 100 = fully dark)</span></label>
+        <div style="display:flex;gap:10px;align-items:center">
+          <input type="range" id="setting-bg-overlay" min="0" max="100" value="${settings.login_bg_overlay||0}" style="flex:1" oninput="document.getElementById('setting-bg-overlay-val').textContent=this.value+'%'">
+          <span id="setting-bg-overlay-val" style="font-size:13px;color:var(--text-muted);min-width:36px">${settings.login_bg_overlay||0}%</span>
+        </div>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:4px">Darkens the background image. Set to 0 for a fully custom landing page graphic.</p>
+      </div>
+    </div>
+    <div style="border-top:1px solid var(--border);margin:20px 0;padding-top:20px">
+      <h4 style="margin-bottom:16px;font-size:14px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Join Agreement</h4>
+      <div class="form-group">
+        <label>Show Agreement on Registration</label>
+        <select id="setting-agreement-enabled">
+          <option value="0" ${settings.agreement_enabled!=='1'?'selected':''}>Disabled</option>
+          <option value="1" ${settings.agreement_enabled==='1'?'selected':''}>Enabled</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Agreement Text <span style="font-weight:400;color:var(--text-muted)">(Markdown supported)</span></label>
+        <textarea id="setting-agreement-text" style="min-height:140px;font-family:monospace;font-size:13px;resize:vertical" placeholder="## Community Rules&#10;&#10;By joining, you agree to...&#10;&#10;1. Be respectful&#10;2. No spam">${esc(settings.agreement_text||'')}</textarea>
+      </div>
+    </div>
     <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
   `;
+}
+
+async function uploadServerIcon() {
+  const file = document.getElementById('setting-server-icon-file').files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('icon', file);
+  try {
+    await fetch('/api/settings/icon', { method: 'POST', credentials: 'include', body: form });
+    toast('Server icon updated', 'success');
+    loadAdminUsers();
+  } catch (e) { toast('Failed to upload icon', 'error'); }
+}
+
+async function clearServerIcon() {
+  try {
+    await api.put('/api/settings', { server_icon: '' });
+    toast('Server icon removed', 'success');
+    loadAdminUsers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function uploadLoginBg() {
+  const file = document.getElementById('setting-login-bg-file').files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('bg', file);
+  try {
+    await fetch('/api/settings/login-bg', { method: 'POST', credentials: 'include', body: form });
+    toast('Login background updated', 'success');
+    loadAdminUsers();
+  } catch (e) { toast('Failed to upload background', 'error'); }
+}
+
+async function clearLoginBg() {
+  try {
+    await api.put('/api/settings', { login_bg_image: '' });
+    toast('Background removed', 'success');
+    loadAdminUsers();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function saveSettings() {
@@ -1676,6 +1766,10 @@ async function saveSettings() {
     allow_registration: document.getElementById('setting-allow-reg')?.value,
     require_invite: document.getElementById('setting-require-invite')?.value,
     max_upload_mb: document.getElementById('setting-max-upload')?.value,
+    login_bg_color: document.getElementById('setting-bg-color')?.value,
+    login_bg_overlay: document.getElementById('setting-bg-overlay')?.value,
+    agreement_enabled: document.getElementById('setting-agreement-enabled')?.value,
+    agreement_text: document.getElementById('setting-agreement-text')?.value,
   };
   try {
     await api.put('/api/settings', settings);

@@ -17,10 +17,14 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		ServerName string `json:"server_name"`
-		Username   string `json:"username"`
-		Email      string `json:"email"`
-		Password   string `json:"password"`
+		ServerName        string `json:"server_name"`
+		ServerDescription string `json:"server_description"`
+		LoginBgColor      string `json:"login_bg_color"`
+		AgreementEnabled  string `json:"agreement_enabled"`
+		AgreementText     string `json:"agreement_text"`
+		Username          string `json:"username"`
+		Email             string `json:"email"`
+		Password          string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		errResp(w, http.StatusBadRequest, "invalid request")
@@ -72,6 +76,16 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	h.db.SetSetting("server_name", req.ServerName)
 	h.db.SetSetting("allow_registration", "1")
 	h.db.SetSetting("require_invite", "0")
+	if req.ServerDescription != "" {
+		h.db.SetSetting("server_description", req.ServerDescription)
+	}
+	if req.LoginBgColor != "" {
+		h.db.SetSetting("login_bg_color", req.LoginBgColor)
+	}
+	if req.AgreementEnabled == "1" && req.AgreementText != "" {
+		h.db.SetSetting("agreement_enabled", "1")
+		h.db.SetSetting("agreement_text", req.AgreementText)
+	}
 
 	// Issue token
 	token, err := h.auth.GenerateToken(user.ID, user.Username, user.IsOwner)

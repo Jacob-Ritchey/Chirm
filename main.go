@@ -86,6 +86,7 @@ func main() {
 	r.With(authLimiter).Post("/api/auth/register", h.Register)
 	r.Post("/api/auth/logout", h.Logout)
 	r.Get("/api/join/{code}", h.JoinWithInvite)
+	r.Get("/api/public-settings", h.GetPublicSettings)
 
 	// Authenticated API
 	r.Group(func(r chi.Router) {
@@ -134,6 +135,8 @@ func main() {
 
 		r.Get("/api/settings", h.GetSettings)
 		r.Put("/api/settings", h.UpdateSettings)
+		r.Post("/api/settings/icon", h.UploadServerIcon)
+		r.Post("/api/settings/login-bg", h.UploadLoginBg)
 
 		r.Get("/api/members", h.ListMembers)
 

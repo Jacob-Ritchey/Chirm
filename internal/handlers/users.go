@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -286,6 +289,24 @@ func (h *Handler) JoinWithInvite(w http.ResponseWriter, r *http.Request) {
 
 // --- Settings ---
 
+// GetPublicSettings returns non-sensitive settings accessible without authentication.
+// Used by login page and mobile sidebar to show server branding.
+func (h *Handler) GetPublicSettings(w http.ResponseWriter, r *http.Request) {
+	publicKeys := []string{
+		"server_name", "server_description", "server_icon",
+		"login_bg_color", "login_bg_image", "login_bg_overlay",
+		"require_invite", "allow_registration",
+		"agreement_enabled", "agreement_text",
+	}
+	result := make(map[string]string)
+	for _, k := range publicKeys {
+		if v, err := h.db.GetSetting(k); err == nil {
+			result[k] = v
+		}
+	}
+	ok(w, result)
+}
+
 func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	// Fix #12: Settings are admin-only — they expose operational configuration.
 	_, isAdmin := h.requireAdmin(w, r)
@@ -313,11 +334,17 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed := map[string]bool{
-		"server_name":         true,
-		"allow_registration":  true,
-		"require_invite":      true,
-		"server_description":  true,
-		"max_upload_mb":       true,
+		"server_name":        true,
+		"allow_registration": true,
+		"require_invite":     true,
+		"server_description": true,
+		"max_upload_mb":      true,
+		"server_icon":        true,
+		"login_bg_color":     true,
+		"login_bg_image":     true,
+		"login_bg_overlay":   true,
+		"agreement_enabled":  true,
+		"agreement_text":     true,
 	}
 	for k, v := range req {
 		if allowed[k] {
@@ -331,4 +358,112 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ok(w, map[string]string{"message": "settings updated"})
+}
+
+// UploadServerIcon accepts a multipart image, saves it, and stores the URL in server settings.
+func (h *Handler) UploadServerIcon(w http.ResponseWriter, r *http.Request) {
+	_, isAdmin := h.requireAdmin(w, r)
+	if !isAdmin {
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 5*1024*1024) // 5 MB cap
+	if err := r.ParseMultipartForm(5 * 1024 * 1024); err != nil {
+		errResp(w, http.StatusBadRequest, "file too large (max 5MB)")
+		return
+	}
+
+	file, header, err := r.FormFile("icon")
+	if err != nil {
+		errResp(w, http.StatusBadRequest, "no file provided")
+		return
+	}
+	defer file.Close()
+
+	buf := make([]byte, 512)
+	n, _ := file.Read(buf)
+	mimeType := http.DetectContentType(buf[:n])
+	allowed := map[string]bool{"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true}
+	if !allowed[mimeType] {
+		errResp(w, http.StatusBadRequest, "icon must be JPEG, PNG, GIF or WebP")
+		return
+	}
+	file.Seek(0, 0)
+
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = ".png"
+	}
+	filename := "server_icon_" + newID() + ext
+	destPath := filepath.Join(h.dataDir, "uploads", filename)
+
+	dest, err := os.Create(destPath)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to save icon")
+		return
+	}
+	defer dest.Close()
+	if _, err := io.Copy(dest, file); err != nil {
+		os.Remove(destPath)
+		errResp(w, http.StatusInternalServerError, "failed to write icon")
+		return
+	}
+
+	iconURL := "/uploads/" + filename
+	h.db.SetSetting("server_icon", iconURL)
+	ok(w, map[string]string{"icon": iconURL})
+}
+
+// UploadLoginBg accepts a multipart image for the login page background.
+func (h *Handler) UploadLoginBg(w http.ResponseWriter, r *http.Request) {
+	_, isAdmin := h.requireAdmin(w, r)
+	if !isAdmin {
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024) // 10 MB cap
+	if err := r.ParseMultipartForm(10 * 1024 * 1024); err != nil {
+		errResp(w, http.StatusBadRequest, "file too large (max 10MB)")
+		return
+	}
+
+	file, header, err := r.FormFile("bg")
+	if err != nil {
+		errResp(w, http.StatusBadRequest, "no file provided")
+		return
+	}
+	defer file.Close()
+
+	buf := make([]byte, 512)
+	n, _ := file.Read(buf)
+	mimeType := http.DetectContentType(buf[:n])
+	allowed := map[string]bool{"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true}
+	if !allowed[mimeType] {
+		errResp(w, http.StatusBadRequest, "background must be JPEG, PNG, GIF or WebP")
+		return
+	}
+	file.Seek(0, 0)
+
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = ".jpg"
+	}
+	filename := "login_bg_" + newID() + ext
+	destPath := filepath.Join(h.dataDir, "uploads", filename)
+
+	dest, err := os.Create(destPath)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to save background")
+		return
+	}
+	defer dest.Close()
+	if _, err := io.Copy(dest, file); err != nil {
+		os.Remove(destPath)
+		errResp(w, http.StatusInternalServerError, "failed to write background")
+		return
+	}
+
+	bgURL := "/uploads/" + filename
+	h.db.SetSetting("login_bg_image", bgURL)
+	ok(w, map[string]string{"bg": bgURL})
 }
