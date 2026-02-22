@@ -102,6 +102,13 @@ func main() {
 		r.Post("/api/channels", h.CreateChannel)
 		r.Put("/api/channels/{id}", h.UpdateChannel)
 		r.Delete("/api/channels/{id}", h.DeleteChannel)
+		r.Post("/api/channels/reorder", h.ReorderChannels)
+
+		r.Get("/api/channel-categories", h.ListCategories)
+		r.Post("/api/channel-categories", h.CreateCategory)
+		r.Post("/api/channel-categories/reorder", h.ReorderCategories)
+		r.Put("/api/channel-categories/{id}", h.UpdateCategory)
+		r.Delete("/api/channel-categories/{id}", h.DeleteCategory)
 
 		r.Get("/api/channels/{id}/messages", h.GetMessages)
 		r.Post("/api/channels/{id}/messages", h.SendMessage)

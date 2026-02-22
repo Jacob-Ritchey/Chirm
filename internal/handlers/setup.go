@@ -65,7 +65,7 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create default channel
-	_, err = h.db.CreateChannel("general", "General discussion", "text")
+	_, err = h.db.CreateChannel("general", "General discussion", "text", "", "")
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create channel")
 		return

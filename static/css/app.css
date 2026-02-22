@@ -76,21 +76,11 @@ body { height: 100%; overflow: hidden; background: var(--bg-void); color: var(--
 
 #server-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
-  height: 52px;
   border-bottom: 1px solid var(--border);
-  font-weight: 600;
-  font-size: 15px;
-  cursor: pointer;
   flex-shrink: 0;
   transition: background 0.15s;
-  gap: 8px;
 }
-#server-header:hover { background: var(--bg-elevated); }
-#server-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#server-header .chevron { color: var(--text-secondary); font-size: 12px; }
+#server-header:hover { background: transparent; }
 
 #channels-list {
   flex: 1;
@@ -1671,3 +1661,189 @@ pre code { background: none; border: none; padding: 0; }
 
 /* Full-screen button: jump back to full voice view */
 .vp-fullscreen-btn { font-size: 13px; }
+
+/* ─── ENHANCED SERVER HEADER ───────────────────────────────────────────────── */
+#server-header {
+  flex-direction: column;
+  height: auto;
+  padding: 0;
+}
+
+#server-header-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  width: 100%;
+  cursor: pointer;
+  transition: background 0.15s;
+  box-sizing: border-box;
+  position: relative;
+}
+#server-header-main:hover { background: var(--bg-elevated); }
+#server-header .chevron { flex-shrink: 0; }
+
+/* Expanded: stack icon + name vertically, centered */
+.server-header-expanded #server-header-main {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 14px 8px;
+}
+.server-header-collapsed #server-header-main {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+/* Chevron: absolute top-right when expanded, inline when collapsed */
+.server-header-expanded .chevron {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.server-header-collapsed .chevron {
+  position: static;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+#server-icon-wrap {
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+.server-header-expanded #server-icon-wrap { width: 64px; height: 64px; }
+.server-header-collapsed #server-icon-wrap { width: 28px; height: 28px; }
+
+#server-icon-display {
+  width: 100%; height: 100%;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  transition: all 0.2s;
+}
+#server-icon-display img { width: 100%; height: 100%; object-fit: cover; }
+.server-icon-letter {
+  font-size: 24px; font-weight: 700; color: white;
+}
+.server-header-collapsed .server-icon-letter { font-size: 13px; }
+
+#server-header-text {
+  min-width: 0;
+}
+.server-header-expanded #server-header-text {
+  text-align: center;
+}
+.server-header-collapsed #server-header-text {
+  flex: 1;
+  text-align: left;
+}
+#server-name { font-size: 15px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+
+/* Description lives in the info-bar below */
+.server-description {
+  font-size: 11px; color: var(--text-muted); font-weight: 400;
+  flex: 1; min-width: 0; line-height: 1.5;
+  word-break: break-word; overflow-wrap: anywhere;
+}
+.server-header-collapsed .server-description { display: none !important; }
+
+#server-info-bar {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 0 14px 10px;
+  width: 100%; box-sizing: border-box;
+}
+.server-header-collapsed #server-info-bar { display: none; }
+
+.server-info-btn {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  padding: 3px 6px; border-radius: var(--radius-sm); font-size: 13px;
+  flex-shrink: 0; line-height: 1.5;
+  transition: background 0.15s, color 0.15s;
+}
+.server-info-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+/* ─── CHANNEL LIST TOOLBAR ──────────────────────────────────────────────────── */
+.channel-list-toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px 2px;
+}
+.btn-edit-mode {
+  background: none; border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: var(--radius-sm); padding: 3px 8px; font-size: 11.5px;
+  cursor: pointer; font-family: inherit; transition: all 0.15s;
+}
+.btn-edit-mode:hover, .btn-edit-mode.active {
+  background: var(--accent); color: white; border-color: var(--accent);
+}
+.cat-add-btn {
+  background: none; border: none; color: var(--accent); cursor: pointer;
+  padding: 2px 5px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 700;
+  transition: background 0.15s;
+}
+.cat-add-btn:hover { background: var(--bg-elevated); }
+
+/* ─── CATEGORY SECTIONS ─────────────────────────────────────────────────────── */
+.channel-category-section { margin-bottom: 2px; }
+.channel-category {
+  position: relative;
+  user-select: none;
+}
+.cat-chevron {
+  display: inline-block; width: 10px; text-align: center;
+  font-size: 10px; flex-shrink: 0;
+}
+.cat-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-actions {
+  display: flex; align-items: center; gap: 2px; margin-left: auto; opacity: 0;
+  transition: opacity 0.15s;
+}
+.channel-category:hover .cat-actions { opacity: 1; }
+.category-channels { padding-left: 4px; }
+
+/* ─── CHANNEL EMOJI ICON ─────────────────────────────────────────────────────── */
+.ch-emoji { font-size: 15px !important; line-height: 1; }
+.ch-hash { font-size: 16px; font-weight: 500; }
+.ch-voice-emoji { position: relative; display: inline-flex; align-items: center; }
+.voice-badge {
+  font-size: 9px;
+  line-height: 1;
+  margin-left: 1px;
+  opacity: 0.75;
+  position: relative;
+  top: 2px;
+}
+/* Give empty category channel lists a drop target zone in edit mode */
+.channel-category-section .category-channels:empty {
+  min-height: 28px;
+}
+/* Highlight category header when a channel is dragged over it */
+.channel-category.drag-over {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: var(--radius-sm);
+  outline: 1px dashed var(--accent);
+}
+
+/* ─── DRAG & DROP ───────────────────────────────────────────────────────────── */
+.drag-handle {
+  color: var(--text-muted); font-size: 14px; cursor: grab;
+  padding: 0 2px; flex-shrink: 0; opacity: 0.5;
+  transition: opacity 0.15s;
+}
+.channel-item:hover .drag-handle { opacity: 1; }
+.channel-item.dragging { opacity: 0.4; }
+.channel-item.drag-target {
+  background: var(--bg-elevated);
+  border-top: 2px solid var(--accent);
+}
+.channel-category.dragging { opacity: 0.4; }
+.category-channels.drag-over {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: var(--radius-sm);
+  outline: 1px dashed var(--accent);
+}
+.channel-item.edit-mode { cursor: default; }
+.channel-item.edit-mode:hover { background: var(--bg-hover); }

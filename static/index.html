@@ -13,9 +13,20 @@
 
   <!-- ─── LEFT SIDEBAR ─── -->
   <div id="sidebar">
-    <div id="server-header">
-      <span id="server-name">Chirm</span>
-      <span class="chevron">▼</span>
+    <div id="server-header" class="server-header-expanded">
+      <div id="server-header-main" onclick="toggleServerInfo()">
+        <div id="server-icon-wrap">
+          <div id="server-icon-display"></div>
+        </div>
+        <div id="server-header-text">
+          <span id="server-name">Chirm</span>
+        </div>
+        <span class="chevron" id="server-chevron">▾</span>
+      </div>
+      <div id="server-info-bar">
+        <span id="server-description" class="server-description"></span>
+        <button class="server-info-btn" onclick="openServerRules()" title="Server Rules & Info">ℹ</button>
+      </div>
     </div>
 
     <div id="channels-list">

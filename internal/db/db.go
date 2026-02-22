@@ -72,12 +72,21 @@ CREATE TABLE IF NOT EXISTS user_roles (
 	FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS channel_categories (
+	id         TEXT PRIMARY KEY,
+	name       TEXT NOT NULL,
+	position   INTEGER DEFAULT 0,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS channels (
 	id          TEXT PRIMARY KEY,
 	name        TEXT NOT NULL,
 	description TEXT DEFAULT '',
 	type        TEXT DEFAULT 'text',
 	position    INTEGER DEFAULT 0,
+	emoji       TEXT DEFAULT '',
+	category_id TEXT DEFAULT '',
 	created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -142,6 +151,8 @@ CREATE INDEX IF NOT EXISTS idx_custom_emojis_name ON custom_emojis(name);
 	}
 	// Idempotent column additions for existing DBs
 	d.Exec(`ALTER TABLE messages ADD COLUMN reply_to_id TEXT`)
+	d.Exec(`ALTER TABLE channels ADD COLUMN emoji TEXT DEFAULT ''`)
+	d.Exec(`ALTER TABLE channels ADD COLUMN category_id TEXT DEFAULT ''`)
 	return nil
 }
 
@@ -182,7 +193,16 @@ type Channel struct {
 	Description string    `json:"description"`
 	Type        string    `json:"type"`
 	Position    int       `json:"position"`
+	Emoji       string    `json:"emoji"`
+	CategoryID  string    `json:"category_id"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type ChannelCategory struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Position  int       `json:"position"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Reaction struct {
@@ -476,12 +496,12 @@ func (d *DB) RemoveRole(userID, roleID string) error {
 
 // --- Channels ---
 
-func (d *DB) CreateChannel(name, description, chType string) (*Channel, error) {
+func (d *DB) CreateChannel(name, description, chType, emoji, categoryID string) (*Channel, error) {
 	id := NewID()
 	var pos int
-	d.QueryRow(`SELECT COALESCE(MAX(position), 0) + 1 FROM channels`).Scan(&pos)
-	_, err := d.Exec(`INSERT INTO channels (id, name, description, type, position) VALUES (?, ?, ?, ?, ?)`,
-		id, name, description, chType, pos)
+	d.QueryRow(`SELECT COALESCE(MAX(position), 0) + 1 FROM channels WHERE category_id = ?`, categoryID).Scan(&pos)
+	_, err := d.Exec(`INSERT INTO channels (id, name, description, type, position, emoji, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, name, description, chType, pos, emoji, categoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -490,13 +510,13 @@ func (d *DB) CreateChannel(name, description, chType string) (*Channel, error) {
 
 func (d *DB) GetChannelByID(id string) (*Channel, error) {
 	c := &Channel{}
-	err := d.QueryRow(`SELECT id, name, description, type, position, created_at FROM channels WHERE id = ?`, id).
-		Scan(&c.ID, &c.Name, &c.Description, &c.Type, &c.Position, &c.CreatedAt)
+	err := d.QueryRow(`SELECT id, name, description, type, position, COALESCE(emoji,''), COALESCE(category_id,''), created_at FROM channels WHERE id = ?`, id).
+		Scan(&c.ID, &c.Name, &c.Description, &c.Type, &c.Position, &c.Emoji, &c.CategoryID, &c.CreatedAt)
 	return c, err
 }
 
 func (d *DB) ListChannels() ([]Channel, error) {
-	rows, err := d.Query(`SELECT id, name, description, type, position, created_at FROM channels ORDER BY position ASC`)
+	rows, err := d.Query(`SELECT id, name, description, type, position, COALESCE(emoji,''), COALESCE(category_id,''), created_at FROM channels ORDER BY category_id ASC, position ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -504,15 +524,83 @@ func (d *DB) ListChannels() ([]Channel, error) {
 	var channels []Channel
 	for rows.Next() {
 		var c Channel
-		rows.Scan(&c.ID, &c.Name, &c.Description, &c.Type, &c.Position, &c.CreatedAt)
+		rows.Scan(&c.ID, &c.Name, &c.Description, &c.Type, &c.Position, &c.Emoji, &c.CategoryID, &c.CreatedAt)
 		channels = append(channels, c)
 	}
 	return channels, nil
 }
 
-func (d *DB) UpdateChannel(id, name, description string) error {
-	_, err := d.Exec(`UPDATE channels SET name = ?, description = ? WHERE id = ?`, name, description, id)
+func (d *DB) UpdateChannel(id, name, description, emoji, categoryID string) error {
+	_, err := d.Exec(`UPDATE channels SET name = ?, description = ?, emoji = ?, category_id = ? WHERE id = ?`, name, description, emoji, categoryID, id)
 	return err
+}
+
+func (d *DB) ReorderChannels(orders []struct{ ID string; Position int; CategoryID string }) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	for _, o := range orders {
+		tx.Exec(`UPDATE channels SET position = ?, category_id = ? WHERE id = ?`, o.Position, o.CategoryID, o.ID)
+	}
+	return tx.Commit()
+}
+
+// --- Channel Categories ---
+
+func (d *DB) CreateCategory(name string) (*ChannelCategory, error) {
+	id := NewID()
+	var pos int
+	d.QueryRow(`SELECT COALESCE(MAX(position), 0) + 1 FROM channel_categories`).Scan(&pos)
+	_, err := d.Exec(`INSERT INTO channel_categories (id, name, position) VALUES (?, ?, ?)`, id, name, pos)
+	if err != nil {
+		return nil, err
+	}
+	cat := &ChannelCategory{}
+	d.QueryRow(`SELECT id, name, position, created_at FROM channel_categories WHERE id = ?`, id).
+		Scan(&cat.ID, &cat.Name, &cat.Position, &cat.CreatedAt)
+	return cat, nil
+}
+
+func (d *DB) ListCategories() ([]ChannelCategory, error) {
+	rows, err := d.Query(`SELECT id, name, position, created_at FROM channel_categories ORDER BY position ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cats []ChannelCategory
+	for rows.Next() {
+		var c ChannelCategory
+		rows.Scan(&c.ID, &c.Name, &c.Position, &c.CreatedAt)
+		cats = append(cats, c)
+	}
+	if cats == nil {
+		cats = []ChannelCategory{}
+	}
+	return cats, nil
+}
+
+func (d *DB) UpdateCategory(id, name string) error {
+	_, err := d.Exec(`UPDATE channel_categories SET name = ? WHERE id = ?`, name, id)
+	return err
+}
+
+func (d *DB) DeleteCategory(id string) error {
+	// Move channels in this category to uncategorized
+	d.Exec(`UPDATE channels SET category_id = '' WHERE category_id = ?`, id)
+	_, err := d.Exec(`DELETE FROM channel_categories WHERE id = ?`, id)
+	return err
+}
+
+func (d *DB) ReorderCategories(orders []struct{ ID string; Position int }) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	for _, o := range orders {
+		tx.Exec(`UPDATE channel_categories SET position = ? WHERE id = ?`, o.Position, o.ID)
+	}
+	return tx.Commit()
 }
 
 func (d *DB) DeleteChannel(id string) error {
