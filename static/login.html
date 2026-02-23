@@ -84,47 +84,7 @@
       <button class="btn btn-primary w-full" onclick="doRegister()">Create Account</button>
     </div>
 
-    <!-- CERT STEP — shown during invite onboarding before avatar setup -->
-    <div id="cert-step" style="display:none">
-      <div style="text-align:center;margin-bottom:20px">
-        <div style="font-size:52px;margin-bottom:10px;line-height:1">🔒</div>
-        <h2 style="font-size:18px;margin-bottom:8px">One quick setup step</h2>
-        <p style="font-size:13px;color:var(--text-muted);line-height:1.55;margin:0">
-          To receive notifications and install Chirm as an app, your device needs to
-          <strong>trust this server's certificate</strong>. It's a one-time thing and takes about a minute.
-        </p>
-      </div>
-
-      <!-- OS tabs — auto-selected by JS -->
-      <div id="cert-step-tabs" style="display:flex;gap:4px;margin-bottom:14px">
-        <button onclick="certStepTab('android')" id="cst-android" class="cert-tab-btn">Android</button>
-        <button onclick="certStepTab('ios')"     id="cst-ios"     class="cert-tab-btn">iPhone / iPad</button>
-        <button onclick="certStepTab('win')"     id="cst-win"     class="cert-tab-btn">Windows</button>
-        <button onclick="certStepTab('mac')"     id="cst-mac"     class="cert-tab-btn">Mac</button>
-      </div>
-
-      <a href="/ca-cert" id="cert-step-dl"
-         style="display:flex;align-items:center;justify-content:center;gap:8px;padding:11px 16px;
-                border-radius:8px;background:var(--accent,#5865f2);color:#fff;font-weight:600;
-                font-size:14px;margin-bottom:16px;text-decoration:none">
-        ⬇ Download Certificate
-      </a>
-
-      <div id="cert-step-instructions"
-           style="font-size:12.5px;color:var(--text-muted);line-height:1.75;background:var(--bg-elevated,#2b2d31);
-                  border-radius:8px;padding:14px 16px;margin-bottom:20px;min-height:80px">
-      </div>
-
-      <button class="btn btn-primary w-full" onclick="certStepDone()" style="margin-bottom:8px">
-        I've installed it — Continue →
-      </button>
-      <button class="btn btn-ghost w-full" onclick="certStepSkip()"
-              style="font-size:13px;color:var(--text-muted)">
-        Skip for now
-      </button>
-    </div>
-
-    <!-- AVATAR STEP — shown after successful registration (Fix 2) -->
+    <!-- AVATAR STEP — shown after successful registration -->
     <div id="avatar-step">
       <div style="text-align:center;margin-bottom:16px">
         <h2 style="font-size:20px;margin-bottom:6px">Set your avatar</h2>
@@ -145,8 +105,10 @@
 
     <div class="auth-footer" id="auth-footer">
       Self-hosted with <a href="https://www.chirm.org" target="_blank">Chirm</a>
-      &nbsp;·&nbsp;
-      <a href="/ca-cert" style="color:var(--text-muted);font-size:12px" title="Download the server CA certificate to trust on this device">🔒 Trust Cert</a>
+      <span id="cert-footer-link" style="display:none">
+        &nbsp;·&nbsp;
+        <a href="/ca-cert" style="color:var(--text-muted);font-size:12px" title="Install the server certificate to enable push notifications &amp; PWA install">🔒 Install Cert</a>
+      </span>
     </div>
   </div>
 </div>
@@ -246,6 +208,11 @@
       document.getElementById('reg-invite').value = inviteCode;
       showTab('register');
     }
+
+    // Show the cert footer link only if the server has a CA cert to offer.
+    fetch('/ca-cert', { method: 'HEAD' }).then(r => {
+      if (r.ok) document.getElementById('cert-footer-link').style.display = 'inline';
+    }).catch(() => {});
   }
 
   function showTab(tab) {
@@ -327,111 +294,14 @@
       const data = await res.json();
       if (!res.ok) { showError(data.error || 'Registration failed'); _agreementAccepted = false; return; }
 
-      // Fix 2: Show avatar upload step instead of redirecting immediately
-      // If user arrived via invite link, first show the cert trust onboarding step.
-      if (inviteCode) {
-        showCertStep(username);
-      } else {
-        showAvatarStep(username);
-      }
+      // Show avatar upload step
+      showAvatarStep(username);
     } catch (e) { showError('Network error. Is the server running?'); }
   }
 
-  // ── Cert onboarding step (shown for invite-link registrations) ────────────
-  let _certStepUsername = null;
-
-  const _certStepCopy = {
-    android: {
-      icon: '🤖',
-      steps: [
-        'Tap <strong>Download Certificate</strong> above — your browser will save a <code>.pem</code> file.',
-        'Open <strong>Settings → Security → Encryption &amp; credentials</strong> (exact path varies by brand).',
-        'Tap <strong>Install a certificate → CA certificate</strong>, then pick the file you just downloaded.',
-        'Confirm. Come back here and tap <em>I\'ve installed it</em>. 🎉',
-      ],
-    },
-    ios: {
-      icon: '🍎',
-      steps: [
-        'Tap <strong>Download Certificate</strong> above — do this in <strong>Safari</strong> (Chrome on iOS won\'t work).',
-        'Safari will say "This website is trying to download a configuration profile." Tap <strong>Allow</strong>.',
-        'Open <strong>Settings → General → VPN &amp; Device Management</strong> and tap the new profile → <strong>Install</strong>.',
-        'Go to <strong>Settings → General → About → Certificate Trust Settings</strong> and enable the Chirm CA.',
-        'Come back here and tap <em>I\'ve installed it</em>. 🎉',
-      ],
-    },
-    win: {
-      icon: '🪟',
-      steps: [
-        'Click <strong>Download Certificate</strong> above.',
-        'Double-click the downloaded <code>chirm-ca.pem</code> file → <strong>Install Certificate…</strong>',
-        'Choose <strong>Local Machine</strong> → Next → <em>Place all certificates in the following store</em> → Browse → <strong>Trusted Root Certification Authorities</strong> → OK → Finish.',
-        'Restart Chrome or Edge. Come back and tap <em>I\'ve installed it</em>. 🎉',
-      ],
-    },
-    mac: {
-      icon: '🍏',
-      steps: [
-        'Click <strong>Download Certificate</strong> above.',
-        'Double-click the downloaded <code>chirm-ca.pem</code> — Keychain Access opens.',
-        'Select the <strong>System</strong> keychain and click <strong>Add</strong>.',
-        'Find the <strong>Chirm Local CA</strong> entry (or "mkcert …" if you used the manual script), double-click it, expand <strong>Trust</strong>, set <em>When using this certificate</em> to <strong>Always Trust</strong>. Close and enter your password.',
-        'Reload this page and tap <em>I\'ve installed it</em>. 🎉',
-      ],
-    },
-  };
-
-  function _detectOS() {
-    const ua = navigator.userAgent;
-    if (/iPhone|iPad|iPod/.test(ua)) return 'ios';
-    if (/Android/.test(ua))          return 'android';
-    if (/Win/.test(ua))              return 'win';
-    if (/Mac/.test(ua))              return 'mac';
-    return 'win';
-  }
-
-  function showCertStep(username) {
-    _certStepUsername = username;
-    // Probe whether the server actually has a CA cert to offer.
-    // If /ca-cert returns 404 the server is using a proper CA-signed cert
-    // (or the self-signed fallback without mkcert), so skip this step entirely.
-    fetch('/ca-cert', { method: 'HEAD' }).then(r => {
-      if (!r.ok) {
-        // No cert to install — go straight to avatar setup.
-        showAvatarStep(username);
-        return;
-      }
-      document.getElementById('form-register').style.display = 'none';
-      document.getElementById('error-msg').style.display = 'none';
-      document.getElementById('auth-tabs').style.display = 'none';
-      document.getElementById('auth-footer').style.display = 'none';
-      document.getElementById('cert-step').style.display = 'block';
-      certStepTab(_detectOS());
-    }).catch(() => {
-      // Network error — just continue to avatar step.
-      showAvatarStep(username);
-    });
-  }
-
-  function certStepTab(os) {
-    ['android','ios','win','mac'].forEach(d => {
-      document.getElementById('cst-' + d).classList.toggle('cert-tab-active', d === os);
-    });
-    const copy = _certStepCopy[os];
-    document.getElementById('cert-step-instructions').innerHTML =
-      `<ol style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px">` +
-      copy.steps.map(s => `<li>${s}</li>`).join('') +
-      `</ol>`;
-  }
-
-  function certStepDone()  { showAvatarStep(_certStepUsername); }
-  function certStepSkip()  { showAvatarStep(_certStepUsername); }
-
   // ── Avatar step ───────────────────────────────────────────────────────────
-  // Fix 2: Avatar upload step
   function showAvatarStep(username) {
     document.getElementById('form-register').style.display = 'none';
-    document.getElementById('cert-step').style.display = 'none';
     document.getElementById('error-msg').style.display = 'none';
     document.getElementById('auth-tabs').style.display = 'none';
     document.getElementById('auth-footer').style.display = 'none';
@@ -468,7 +338,6 @@
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     if (document.getElementById('avatar-step').style.display !== 'none') return;
-    if (document.getElementById('cert-step').style.display   !== 'none') return;
     if (document.getElementById('agreement-overlay').style.display !== 'none') return;
     const loginForm = document.getElementById('form-login');
     if (loginForm.style.display !== 'none') doLogin();
@@ -478,24 +347,5 @@
   init();
 </script>
 
-<style>
-  .cert-tab-btn {
-    flex: 1;
-    padding: 5px 0;
-    font-size: 12px;
-    border: 1px solid var(--border, #3f4147);
-    background: none;
-    color: var(--text-muted, #a0a4b0);
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background .15s, color .15s;
-  }
-  .cert-tab-active {
-    background: var(--accent, #5865f2);
-    color: #fff;
-    border-color: var(--accent, #5865f2);
-  }
-  #cert-step ol li { padding-left: 2px; }
-</style>
 </body>
 </html>
