@@ -21,17 +21,33 @@ const ChirmNotifs = (() => {
       }
     });
 
-    // If inBrowserOnly was set on a previous session, the push subscription may
-    // still be live on the server. Unsubscribe now to make the setting take effect
-    // without requiring a settings-panel interaction.
+    // Sync the inBrowserOnly preference into the SW immediately.
+    // The SW cannot read localStorage, so we must push the value explicitly.
+    // This also handles the case where the user set the pref on a previous session.
+    await _syncPrefsToSW();
+
+    // Belt-and-suspenders: also remove the push subscription server-side so the
+    // server doesn't waste cycles sending pushes that the SW will silently drop.
     if (typeof ChirmSettings !== 'undefined' &&
         typeof ChirmSettings.isInBrowserOnly === 'function' &&
         ChirmSettings.isInBrowserOnly()) {
       await unsubscribePush();
     }
 
-    console.log('[Chirm Notifs] init, permission:', _permState, '| inBrowserOnly:', 
+    console.log('[Chirm Notifs] init, permission:', _permState, '| inBrowserOnly:',
       typeof ChirmSettings !== 'undefined' ? ChirmSettings.isInBrowserOnly?.() : 'unknown');
+  }
+
+  // Push current settings into the SW context via postMessage.
+  // Must be called whenever inBrowserOnly changes, and on every page load.
+  async function _syncPrefsToSW() {
+    if (!_swReg) return;
+    const sw = _swReg.active || _swReg.waiting || _swReg.installing;
+    if (!sw) return;
+    const inBrowserOnly = typeof ChirmSettings !== 'undefined' &&
+      typeof ChirmSettings.isInBrowserOnly === 'function' &&
+      ChirmSettings.isInBrowserOnly();
+    sw.postMessage({ type: 'set-notification-prefs', inBrowserOnly });
   }
 
   // ── Permission request ───────────────────────────────────────────────────────
@@ -347,6 +363,7 @@ const ChirmNotifs = (() => {
     onNewMessage,
     isPermissionGranted,
     isPermissionDenied,
+    syncPrefsToSW: _syncPrefsToSW,
     _isMentionedPublic,   // exposed for WS handler
   };
 })();

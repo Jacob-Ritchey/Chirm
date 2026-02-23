@@ -213,10 +213,14 @@ const ChirmSettings = (() => {
       // In-browser-only toggle
       document.getElementById('settings-in-browser-only')?.addEventListener('change', async (e) => {
         setInBrowserOnly(e.target.checked);
+        // Sync to SW immediately — the SW cannot read localStorage so we must
+        // push the value explicitly. This makes the setting take effect right away
+        // without requiring a page reload, which is critical on mobile.
+        if (typeof ChirmNotifs !== 'undefined') {
+          await ChirmNotifs.syncPrefsToSW();
+        }
         if (e.target.checked) {
-          // Remove push subscription so the server has no endpoint to deliver to.
-          // The SW push handler can't read localStorage, so client-side gating alone
-          // is insufficient — unsubscribing is the only reliable way to stop OS notifications.
+          // Also remove push subscription server-side as belt-and-suspenders
           if (typeof ChirmNotifs !== 'undefined') await ChirmNotifs.unsubscribePush();
           toast('OS notifications suppressed — toasts only', 'info');
         } else {

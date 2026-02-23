@@ -1,9 +1,27 @@
-// sw.js — Chirm Service Worker v2
+// sw.js — Chirm Service Worker v4
 // Handles: static asset caching and background push notifications.
 // CRITICAL: We do NOT cache HTML or intercept navigation requests.
 //           This prevents login redirect loops on mobile / self-signed certs.
 
-const SW_VERSION = 'chirm-sw-v4';
+const SW_VERSION = 'chirm-sw-v5';
+
+// ── Per-user notification preferences ────────────────────────────────────────
+// The SW cannot read localStorage, so the main thread sends these via postMessage.
+// Keyed by user ID so account-switching on the same browser doesn't bleed over.
+let _suppressOsNotifications = false; // mirrors ChirmSettings.inBrowserOnly
+
+self.addEventListener('message', (event) => {
+  const msg = event.data;
+  if (!msg) return;
+  if (msg.type === 'skip-waiting') {
+    self.skipWaiting();
+    return;
+  }
+  if (msg.type === 'set-notification-prefs') {
+    // { type, inBrowserOnly: bool }
+    _suppressOsNotifications = !!msg.inBrowserOnly;
+  }
+});
 
 // Only truly-static, content-hashed assets — NO HTML, NO '/' navigation.
 const STATIC_ASSETS = [
@@ -93,6 +111,11 @@ self.addEventListener('fetch', (event) => {
 
 // ─── PUSH NOTIFICATIONS ───────────────────────────────────────────────────────
 self.addEventListener('push', (event) => {
+  // Respect the inBrowserOnly preference set from the main thread.
+  // This is the only reliable gate for mobile — subscription removal can fail
+  // if the browser kills the page mid-flight on a background tab.
+  if (_suppressOsNotifications) return;
+
   let data = {};
   try { data = event.data?.json() ?? {}; } catch { data = { body: event.data?.text() }; }
 
