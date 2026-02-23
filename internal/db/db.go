@@ -1002,11 +1002,15 @@ func (d *DB) SavePushSubscription(userID, data string) error {
 	if err := json.Unmarshal([]byte(data), &sub); err != nil || sub.Endpoint == "" {
 		return fmt.Errorf("invalid subscription data")
 	}
+	// Remove any existing subscription for this endpoint regardless of user.
+	// This prevents stale entries from account-switching on the same device:
+	// if user A subscribed then logged out without unsubscribing, user B logging
+	// in on the same browser would otherwise leave A's entry pointing at B's device.
+	_, _ = d.Exec(`DELETE FROM push_subscriptions WHERE endpoint=?`, sub.Endpoint)
 	id := NewID()
 	_, err := d.Exec(`
 		INSERT INTO push_subscriptions (id, user_id, endpoint, data)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(user_id, endpoint) DO UPDATE SET data=excluded.data`,
+		VALUES (?, ?, ?, ?)`,
 		id, userID, sub.Endpoint, data)
 	return err
 }

@@ -21,7 +21,17 @@ const ChirmNotifs = (() => {
       }
     });
 
-    console.log('[Chirm Notifs] init, permission:', _permState);
+    // If inBrowserOnly was set on a previous session, the push subscription may
+    // still be live on the server. Unsubscribe now to make the setting take effect
+    // without requiring a settings-panel interaction.
+    if (typeof ChirmSettings !== 'undefined' &&
+        typeof ChirmSettings.isInBrowserOnly === 'function' &&
+        ChirmSettings.isInBrowserOnly()) {
+      await unsubscribePush();
+    }
+
+    console.log('[Chirm Notifs] init, permission:', _permState, '| inBrowserOnly:', 
+      typeof ChirmSettings !== 'undefined' ? ChirmSettings.isInBrowserOnly?.() : 'unknown');
   }
 
   // ── Permission request ───────────────────────────────────────────────────────
@@ -186,9 +196,13 @@ const ChirmNotifs = (() => {
       return;
     }
 
-    // Case 3: Page is visible AND focused — show in-app toast for mentions only
+    // Case 3: Page is visible AND focused
+    // Mentions get both the in-app toast (for context) AND an OS notification
+    // (for the sound/taskbar ping) — they're high-priority enough to warrant both.
+    // Non-mentions are silent when the user is actively in the app.
     if (isMention) {
       _showMentionToast(authorName, channelName, msgPreview, channelId);
+      _showOsNotification(`${authorName} mentioned you in #${channelName}`, msgPreview, channelId, msg.id);
     }
   }
 
@@ -196,6 +210,12 @@ const ChirmNotifs = (() => {
 
   function _showOsNotification(title, body, channelId, messageId) {
     if (_permState !== 'granted') return;
+
+    // User may have opted into in-browser toasts only — skip OS notifications.
+    // Guard is typeof-safe in case an old cached user-settings.js is still active.
+    if (typeof ChirmSettings !== 'undefined' &&
+        typeof ChirmSettings.isInBrowserOnly === 'function' &&
+        ChirmSettings.isInBrowserOnly()) return;
 
     if (_swReg) {
       _swReg.showNotification(title, {
@@ -231,17 +251,60 @@ const ChirmNotifs = (() => {
     const container = document.getElementById('toast-container');
     if (!container) return;
 
+    // Strip markdown syntax that looks noisy in a one-line preview,
+    // then truncate to match the reply bar's 80-char pipeline.
+    const cleanBody = _formatPreview(body, 80);
+
     const el = document.createElement('div');
     el.className = 'toast mention-toast';
-    el.innerHTML = `<strong>@you · #${esc(channelName)}</strong><br><span>${esc(authorName)}: ${esc(body)}</span>`;
-    el.style.cursor = 'pointer';
+    el.title = 'Go to channel';
+    el.innerHTML =
+      `<div class="mention-toast-header">` +
+        `<span>@you · <strong>#${esc(channelName)}</strong></span>` +
+        `<button class="mention-toast-dismiss" title="Dismiss">✕</button>` +
+      `</div>` +
+      `<div class="mention-toast-body">${esc(authorName)}: ${esc(cleanBody)}</div>`;
+
+    // Dismiss button — closes without navigating
+    el.querySelector('.mention-toast-dismiss').addEventListener('click', (e) => {
+      e.stopPropagation();
+      _dismissToast(el);
+    });
+
+    // Click anywhere else on the toast → navigate to channel
     el.addEventListener('click', () => {
       const ch = App.channels?.find(c => c.id === channelId);
       if (ch) openChannel(ch);
-      el.remove();
+      _dismissToast(el);
     });
+
     container.appendChild(el);
-    setTimeout(() => el.remove?.(), 8000);
+
+    // Auto-dismiss after 8 s (with fade-out)
+    const timer = setTimeout(() => _dismissToast(el), 8000);
+    el._dismissTimer = timer;
+  }
+
+  function _dismissToast(el) {
+    clearTimeout(el._dismissTimer);
+    el.style.transition = 'opacity 0.2s, transform 0.2s';
+    el.style.opacity = '0';
+    el.style.transform = 'translateX(12px)';
+    setTimeout(() => el.remove(), 200);
+  }
+
+  // Strip common markdown tokens and truncate for use in a preview line.
+  function _formatPreview(text, maxLen) {
+    if (!text) return '';
+    return text
+      .replace(/\*\*(.+?)\*\*/g, '$1')   // **bold**
+      .replace(/\*(.+?)\*/g,   '$1')     // *italic*
+      .replace(/`(.+?)`/g,     '$1')     // `code`
+      .replace(/~~(.+?)~~/g,   '$1')     // ~~strike~~
+      .replace(/^> /gm,        '')       // > blockquote prefix
+      .replace(/\n+/g,         ' ')      // collapse newlines
+      .trim()
+      .slice(0, maxLen) + (text.trim().length > maxLen ? '…' : '');
   }
 
   // ── Mention detection ────────────────────────────────────────────────────────

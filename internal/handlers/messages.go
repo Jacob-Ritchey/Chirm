@@ -94,28 +94,40 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Broadcast to all channel subscribers
+	// Broadcast to all channel subscribers (message.new is channel-scoped)
 	h.hub.BroadcastToChannel(channelID, WSEvent{Type: "message.new", Data: msg})
-	// Also broadcast globally so sidebar can show unread indicators
-	h.hub.Broadcast(WSEvent{Type: "message.activity", Data: map[string]string{"channel_id": channelID}})
 
-	// Send Web Push notifications to subscribers (background, non-blocking)
+	// Resolve channel name and author for notifications
 	chObj, _ := h.db.GetChannelByID(channelID)
 	chName := channelID
 	if chObj != nil {
 		chName = chObj.Name
 	}
-	content := msg.Content
-	if len(content) > 120 {
-		content = content[:120] + "…"
+	contentPreview := msg.Content
+	if len(contentPreview) > 120 {
+		contentPreview = contentPreview[:120] + "…"
 	}
 	authorName := "Someone"
 	if msg.Author != nil {
 		authorName = msg.Author.Username
 	}
+	authorID := msg.UserID
+
+	// Broadcast globally so ALL clients can update unread dots AND show in-app
+	// notifications — message.new only reaches the subscribed channel's clients.
+	h.hub.Broadcast(WSEvent{Type: "message.activity", Data: map[string]interface{}{
+		"channel_id":   channelID,
+		"channel_name": chName,
+		"author_id":    authorID,
+		"author":       authorName,
+		"preview":      contentPreview,
+		"message_id":   msg.ID,
+	}})
+
+	// Send Web Push notifications (background, non-blocking)
 	h.BroadcastPush(chName, u.ID, PushPayload{
 		Title:     authorName + " in #" + chName,
-		Body:      content,
+		Body:      contentPreview,
 		ChannelID: channelID,
 		MessageID: msg.ID,
 		Tag:       "chirm-" + channelID,

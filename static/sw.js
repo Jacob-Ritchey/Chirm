@@ -3,7 +3,7 @@
 // CRITICAL: We do NOT cache HTML or intercept navigation requests.
 //           This prevents login redirect loops on mobile / self-signed certs.
 
-const SW_VERSION = 'chirm-sw-v2';
+const SW_VERSION = 'chirm-sw-v4';
 
 // Only truly-static, content-hashed assets — NO HTML, NO '/' navigation.
 const STATIC_ASSETS = [
@@ -52,20 +52,16 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/ws')) return;
 
   // ── HTML / navigation — ALWAYS network, NEVER serve stale cached HTML ───────
-  // This is the fix for the login redirect loop.
+  // Critically: we do NOT provide a .catch() fallback here.
+  // If the network fails (including self-signed TLS rejection), the browser
+  // handles the error natively — which means it shows its own cert warning page
+  // with the "Accept risk and continue" button intact.
+  // A custom offline HTML response would replace that native UI and trap the user.
   const isNavigation = event.request.mode === 'navigate';
   const isHtmlPath = ['/', '/login', '/setup'].includes(url.pathname) || url.pathname.endsWith('.html');
   if (isNavigation || isHtmlPath) {
-    event.respondWith(
-      fetch(event.request).catch(() =>
-        new Response(
-          '<html><body style="font-family:sans-serif;text-align:center;padding:60px">' +
-          '<h2>You\'re offline</h2><button onclick="location.reload()">Retry</button>' +
-          '</body></html>',
-          { headers: { 'Content-Type': 'text/html' } }
-        )
-      )
-    );
+    // Network only — no fallback, no custom error page.
+    event.respondWith(fetch(event.request));
     return;
   }
 

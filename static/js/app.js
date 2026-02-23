@@ -800,51 +800,50 @@ async function openChannel(ch) {
   // Subscribe via WebSocket
   WS.subscribe(ch.id);
 
-  // ── Cache-first loading with guaranteed network reconciliation ─────────────
-  // Rule: cache gives instant render; network ALWAYS runs to catch messages
-  // that arrived while you were in another channel or offline (WS doesn't
-  // replay history, so we must ask the server).
-
-  const cached = typeof ChirmCache !== 'undefined' ? ChirmCache.get(ch.id) : null;
+  // ── Always clear the message view immediately ─────────────────────────────
+  // This must happen synchronously before any async work so the DOM never
+  // shows stale messages from the previous channel.
   const channelId = ch.id;
+  if (!App.messages[channelId]) App.messages[channelId] = [];
+  renderMessages(channelId);   // renders empty state or whatever is already in memory
+
+  // ── Cache-first loading with guaranteed network reconciliation ─────────────
+  const cached = typeof ChirmCache !== 'undefined' ? ChirmCache.get(channelId) : null;
 
   if (cached && cached.messages.length > 0) {
-    // Instant render from cache
+    // Instant render from cache — overwrites the empty state above
     App.messages[channelId] = [...cached.messages];
     renderMessages(channelId);
     scrollToBottom(true);
   }
 
   // ALWAYS fetch from network — don't skip even if cache is "fresh".
-  // Messages sent to this channel while you were away are NOT in cache
-  // because the WS only delivers to the currently subscribed channel.
+  // WS only delivers messages for the currently-subscribed channel, so any
+  // messages sent while you were elsewhere are only available via HTTP.
   loadMessages(channelId).then(freshMsgs => {
-    if (!freshMsgs || !freshMsgs.length) return;
     if (App.currentChannel?.id !== channelId) return; // user switched away
 
-    // Merge: start with the network response (authoritative history), then
-    // append any WS messages that arrived AFTER the network fetch was initiated
-    // (they'll have IDs not present in freshMsgs).
-    const freshIds = new Set(freshMsgs.map(m => m.id));
+    const freshMsgList = freshMsgs || [];
+
+    // Merge: network response is authoritative history; append any WS messages
+    // that arrived after this fetch was initiated (not present in freshMsgList).
+    const freshIds = new Set(freshMsgList.map(m => m.id));
     const wsOnlyMsgs = (App.messages[channelId] || []).filter(m => !freshIds.has(m.id));
-    const merged = [...freshMsgs, ...wsOnlyMsgs].sort(
+    const merged = [...freshMsgList, ...wsOnlyMsgs].sort(
       (a, b) => new Date(a.created_at) - new Date(b.created_at)
     );
 
     App.messages[channelId] = merged;
     if (typeof ChirmCache !== 'undefined') ChirmCache.set(channelId, merged);
 
-    // Re-render only if the message set actually changed
+    // Re-render if content changed from what's already shown
     const cachedCount = cached?.messages?.length ?? 0;
-    if (merged.length !== cachedCount || wsOnlyMsgs.length > 0) {
+    if (merged.length !== cachedCount || wsOnlyMsgs.length > 0 || !cached) {
       renderMessages(channelId);
       scrollToBottom(true);
     }
   }).catch(() => {
-    // Network unavailable — cache-only is fine for now
-    if (!cached || !cached.messages.length) {
-      App.messages[channelId] = App.messages[channelId] || [];
-    }
+    // Network unavailable — cache-only; DOM already reflects it
   });
 }
 
@@ -1744,18 +1743,38 @@ function openImageViewer(src) {
 function setupWSHandlers() {
   // message.activity is broadcast globally to ALL clients when any message is sent.
   // message.new is only sent to clients subscribed to that specific channel.
-  // This handler is therefore the sole source of unread indicators for channels
-  // the user isn't currently viewing.
-  WS.on('message.activity', ({ channel_id }) => {
-    if (!channel_id) return;
-    if (App.currentChannel?.id === channel_id) return; // already visible
+  // This handler therefore handles BOTH unread indicators AND in-app notifications
+  // for channels the user isn't currently viewing.
+  WS.on('message.activity', (data) => {
+    if (!data || !data.channel_id) return;
+    const channelId = data.channel_id;
+    if (App.currentChannel?.id === channelId) return; // already visible
 
-    const isMuted = typeof ChirmSettings !== 'undefined' && ChirmSettings.isChannelMuted(channel_id);
-    if (isMuted) return; // muted channels don't show the dot
+    const isMuted = typeof ChirmSettings !== 'undefined' && ChirmSettings.isChannelMuted(channelId);
 
-    App.unread.add(channel_id);
-    const el = document.querySelector(`[data-channel-id="${channel_id}"]`);
-    if (el) el.classList.add('unread');
+    // ── Unread indicator ───────────────────────────────────────────────────
+    if (!isMuted) {
+      App.unread.add(channelId);
+      const el = document.querySelector(`[data-channel-id="${channelId}"]`);
+      if (el) el.classList.add('unread');
+    }
+
+    // ── In-app notification ────────────────────────────────────────────────
+    // Only fire if we have enough data and the author isn't the current user.
+    // Web Push handles the fully-backgrounded case; this handles the
+    // "different channel but tab is open" case where push would be redundant.
+    if (data.author_id && data.author_id === App.user?.id) return; // own message
+    if (typeof ChirmNotifs === 'undefined') return;
+
+    // Synthesise a minimal message object so we can reuse onNewMessage()
+    const syntheticMsg = {
+      channel_id: channelId,
+      user_id:    data.author_id,
+      content:    data.preview || '',
+      author:     { username: data.author || 'Someone' },
+      id:         data.message_id,
+    };
+    ChirmNotifs.onNewMessage(syntheticMsg, data.channel_name || channelId);
   });
 
   WS.on('message.new', (msg) => {
@@ -2626,6 +2645,11 @@ function showSimpleModal(title, bodyHtml, onConfirm) {
 
 // ─── LOGOUT ───────────────────────────────────────────────────────────────────
 async function logout() {
+  // Remove push subscription before killing the session so the server doesn't
+  // send push notifications to this browser on behalf of a future user.
+  if (typeof ChirmNotifs !== 'undefined') {
+    await ChirmNotifs.unsubscribePush().catch(() => {});
+  }
   await api.post('/api/auth/logout', {});
   window.location.href = '/login';
 }

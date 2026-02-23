@@ -4,6 +4,7 @@
 //   disablePings: bool       — suppress all @mention notifications
 //   mutedChannels: string[]  — channel IDs where ALL notifications are muted
 //   notifyGranted: bool      — whether user has been asked about notifications
+//   inBrowserOnly: bool      — suppress OS/push notifications; in-app toasts only
 
 const ChirmSettings = (() => {
   const STORAGE_KEY = 'chirm_user_settings';
@@ -12,6 +13,7 @@ const ChirmSettings = (() => {
     disablePings: false,
     mutedChannels: [],
     notifyGranted: false,
+    inBrowserOnly: false,
   };
 
   // ── Read / Write ────────────────────────────────────────────────────────────
@@ -76,6 +78,13 @@ const ChirmSettings = (() => {
     return !!get().disablePings;
   }
 
+  function setInBrowserOnly(value) {
+    set('inBrowserOnly', !!value);
+  }
+  function isInBrowserOnly() {
+    return !!get().inBrowserOnly;
+  }
+
   // ── Settings Modal UI ───────────────────────────────────────────────────────
 
   function openSettingsModal() {
@@ -126,6 +135,14 @@ const ChirmSettings = (() => {
             <div class="settings-row-hint">You won't receive alerts when someone @mentions you</div>
           </div>
           <input type="checkbox" id="settings-disable-pings" ${s.disablePings ? 'checked' : ''}>
+        </label>
+
+        <label class="settings-toggle-row">
+          <div>
+            <div class="settings-row-label">In-browser notifications only</div>
+            <div class="settings-row-hint">Show toasts inside the app but suppress OS and push notifications</div>
+          </div>
+          <input type="checkbox" id="settings-in-browser-only" ${s.inBrowserOnly ? 'checked' : ''}>
         </label>
       </div>
 
@@ -191,6 +208,22 @@ const ChirmSettings = (() => {
       document.getElementById('settings-disable-pings')?.addEventListener('change', (e) => {
         setDisablePings(e.target.checked);
         toast(e.target.checked ? 'Pings muted' : 'Pings enabled', 'info');
+      });
+
+      // In-browser-only toggle
+      document.getElementById('settings-in-browser-only')?.addEventListener('change', async (e) => {
+        setInBrowserOnly(e.target.checked);
+        if (e.target.checked) {
+          // Remove push subscription so the server has no endpoint to deliver to.
+          // The SW push handler can't read localStorage, so client-side gating alone
+          // is insufficient — unsubscribing is the only reliable way to stop OS notifications.
+          if (typeof ChirmNotifs !== 'undefined') await ChirmNotifs.unsubscribePush();
+          toast('OS notifications suppressed — toasts only', 'info');
+        } else {
+          // Re-subscribe so push notifications flow again
+          if (typeof ChirmNotifs !== 'undefined') await ChirmNotifs.requestPermission();
+          toast('OS notifications re-enabled', 'info');
+        }
       });
 
       // Per-channel mute checkboxes

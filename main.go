@@ -189,12 +189,67 @@ func main() {
 		}
 	})
 
-	// Start HTTPS with auto-generated self-signed cert (required for getUserMedia on LAN)
+	// ── TLS / HTTPS startup ────────────────────────────────────────────────────
+	// Priority order for certs:
+	//   1. CHIRM_TLS_CERT / CHIRM_TLS_KEY env vars (explicit paths, e.g. from mkcert)
+	//   2. ./certs/cert.pem + ./certs/key.pem  (auto-detected local files)
+	//   3. In-memory self-signed (last resort — only trusted on localhost)
 	httpsPort := getEnv("HTTPS_PORT", "8443")
-	tlsCert, tlsErr := generateSelfSignedCert()
-	if tlsErr != nil {
-		log.Printf("⚠ Could not generate TLS cert: %v — voice will only work on localhost", tlsErr)
-	} else {
+
+	certFile := getEnv("CHIRM_TLS_CERT", "")
+	keyFile  := getEnv("CHIRM_TLS_KEY",  "")
+
+	// Auto-detect ./certs/ directory if env vars not set
+	if certFile == "" {
+		if _, err := os.Stat("certs/cert.pem"); err == nil {
+			certFile = "certs/cert.pem"
+			keyFile  = "certs/key.pem"
+		}
+	}
+
+	var tlsCert tls.Certificate
+	var tlsErr  error
+	usingRealCert := false
+
+	if certFile != "" && keyFile != "" {
+		tlsCert, tlsErr = tls.LoadX509KeyPair(certFile, keyFile)
+		if tlsErr != nil {
+			log.Printf("⚠ Could not load TLS cert from %s / %s: %v", certFile, keyFile, tlsErr)
+			log.Printf("  Falling back to self-signed (mobile browsers will reject this).")
+		} else {
+			usingRealCert = true
+			log.Printf("✦ TLS: using cert from %s", certFile)
+		}
+	}
+
+	if !usingRealCert {
+		tlsCert, tlsErr = generateSelfSignedCert()
+		if tlsErr != nil {
+			log.Printf("⚠ Could not generate TLS cert: %v", tlsErr)
+		} else {
+			log.Println("⚠ TLS: using self-signed certificate.")
+			log.Println("  Mobile browsers will show a TLS error and cannot accept it for PWAs.")
+			log.Println("")
+			log.Println("  ── Recommended fix: mkcert (trusted local CA, no internet needed) ──")
+			log.Println("  1. Install mkcert:  https://github.com/FiloSottile/mkcert")
+			log.Println("  2. On the server:   mkcert -install")
+			log.Println("     Then:            mkdir -p certs")
+			log.Println("                      mkcert -cert-file certs/cert.pem \\")
+			log.Println("                             -key-file  certs/key.pem \\")
+			log.Println("                             localhost 127.0.0.1 " + getLANIP())
+			log.Println("  3. On each phone:   copy the rootCA.pem from")
+			log.Println("                      $(mkcert -CAROOT)/rootCA.pem")
+			log.Println("                      install it as a trusted CA in Settings → Security.")
+			log.Println("  4. Restart Chirm — it will auto-detect certs/cert.pem.")
+			log.Println("")
+			log.Println("  ── Alternative: Tailscale (zero-config, auto-renewing certs) ──")
+			log.Println("  Install Tailscale on server + devices, then:")
+			log.Println("    tailscale cert $(tailscale status --json | jq -r .Self.DNSName)")
+			log.Println("  Set CHIRM_TLS_CERT and CHIRM_TLS_KEY to the generated files.")
+		}
+	}
+
+	if tlsErr == nil {
 		go func() {
 			tlsServer := &http.Server{
 				Addr:    ":" + httpsPort,
@@ -203,7 +258,11 @@ func main() {
 					Certificates: []tls.Certificate{tlsCert},
 				},
 			}
-			log.Printf("✦ Chirm HTTPS (voice-ready) at https://localhost:%s", httpsPort)
+			if usingRealCert {
+				log.Printf("✦ Chirm HTTPS at https://%s:%s", getLANIP(), httpsPort)
+			} else {
+				log.Printf("✦ Chirm HTTPS (self-signed) at https://localhost:%s", httpsPort)
+			}
 			if err := tlsServer.ListenAndServeTLS("", ""); err != nil {
 				log.Printf("HTTPS server error: %v", err)
 			}
@@ -216,6 +275,37 @@ func main() {
 
 // generateSelfSignedCert creates an in-memory self-signed TLS certificate
 // valid for localhost and all current local network IPs.
+// getLANIP returns the first non-loopback IPv4 address, or "localhost" as fallback.
+func getLANIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "localhost"
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+			return ip.String()
+		}
+	}
+	return "localhost"
+}
+
 func generateSelfSignedCert() (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
