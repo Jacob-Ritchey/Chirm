@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,12 +10,15 @@ import (
 	"crypto/x509/pkix"
 	"embed"
 	"encoding/pem"
+	"fmt"
 	"io/fs"
 	"log"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,12 +37,18 @@ import (
 var staticFiles embed.FS
 
 func main() {
+	// Load .env file if present (does not override existing env vars).
+	loadDotenv(".env")
+
 	port := getEnv("PORT", "8080")
 	dataDir := getEnv("DATA_DIR", "./data")
 
-	// Fix #4: Refuse to start with a missing or default JWT secret.
+	// Refuse to start with a missing or default JWT secret.
 	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" || jwtSecret == "change-this-secret-in-production" || jwtSecret == "change-me-use-a-long-random-string-here" {
+	if jwtSecret == "" ||
+		jwtSecret == "change-this-secret-in-production" ||
+		jwtSecret == "change-me-use-a-long-random-string-here" ||
+		jwtSecret == "change-me-use-a-long-random-string" {
 		log.Fatal("FATAL: JWT_SECRET is not set or is using the insecure default value.\n" +
 			"Generate one with:  openssl rand -hex 32\n" +
 			"Then set it in your environment or .env file before starting Chirm.")
@@ -165,6 +175,31 @@ func main() {
 	// Uploaded files
 	r.Get("/uploads/{filename}", h.ServeUpload)
 
+	// CA cert download — served over plain HTTP so devices can fetch and install
+	// it before they trust the server's TLS certificate.
+	// Android recognises application/x-x509-ca-cert and offers to install it;
+	// iOS/Safari handles it as a configuration profile.
+	r.Get("/ca-cert", func(w http.ResponseWriter, r *http.Request) {
+		// Prefer the built-in CA we generated; fall back to a legacy mkcert root.
+		candidates := []string{"certs/chirm-ca.pem", "certs/rootCA.pem"}
+		var data []byte
+		var readErr error
+		for _, path := range candidates {
+			data, readErr = os.ReadFile(path)
+			if readErr == nil {
+				break
+			}
+		}
+		if readErr != nil {
+			http.Error(w, "CA cert not available. Start Chirm at least once to generate it.", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+		w.Header().Set("Content-Disposition", `attachment; filename="chirm-ca.pem"`)
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(data)
+	})
+
 	// Static SPA — serve embedded files, fallback to index.html
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -191,15 +226,16 @@ func main() {
 
 	// ── TLS / HTTPS startup ────────────────────────────────────────────────────
 	// Priority order for certs:
-	//   1. CHIRM_TLS_CERT / CHIRM_TLS_KEY env vars (explicit paths, e.g. from mkcert)
-	//   2. ./certs/cert.pem + ./certs/key.pem  (auto-detected local files)
-	//   3. In-memory self-signed (last resort — only trusted on localhost)
+	//   1. CHIRM_TLS_CERT / CHIRM_TLS_KEY env vars  (e.g. Let's Encrypt / Tailscale)
+	//   2. ./certs/cert.pem + ./certs/key.pem        (externally supplied, e.g. mkcert)
+	//   3. Built-in persistent CA   →  auto-generates a local CA on first run,
+	//      signs a server cert from it, saves everything to ./certs/, and serves
+	//      the CA cert at /ca-cert so users can install it once and be done.
 	httpsPort := getEnv("HTTPS_PORT", "8443")
 
 	certFile := getEnv("CHIRM_TLS_CERT", "")
 	keyFile  := getEnv("CHIRM_TLS_KEY",  "")
 
-	// Auto-detect ./certs/ directory if env vars not set
 	if certFile == "" {
 		if _, err := os.Stat("certs/cert.pem"); err == nil {
 			certFile = "certs/cert.pem"
@@ -207,15 +243,14 @@ func main() {
 		}
 	}
 
-	var tlsCert tls.Certificate
-	var tlsErr  error
+	var tlsCert      tls.Certificate
+	var tlsErr       error
 	usingRealCert := false
 
 	if certFile != "" && keyFile != "" {
 		tlsCert, tlsErr = tls.LoadX509KeyPair(certFile, keyFile)
 		if tlsErr != nil {
-			log.Printf("⚠ Could not load TLS cert from %s / %s: %v", certFile, keyFile, tlsErr)
-			log.Printf("  Falling back to self-signed (mobile browsers will reject this).")
+			log.Printf("⚠ Could not load TLS cert from %s / %s: %v — falling back to built-in CA", certFile, keyFile, tlsErr)
 		} else {
 			usingRealCert = true
 			log.Printf("✦ TLS: using cert from %s", certFile)
@@ -223,29 +258,15 @@ func main() {
 	}
 
 	if !usingRealCert {
-		tlsCert, tlsErr = generateSelfSignedCert()
+		tlsCert, tlsErr = ensurePersistentCert("certs")
 		if tlsErr != nil {
 			log.Printf("⚠ Could not generate TLS cert: %v", tlsErr)
 		} else {
-			log.Println("⚠ TLS: using self-signed certificate.")
-			log.Println("  Mobile browsers will show a TLS error and cannot accept it for PWAs.")
-			log.Println("")
-			log.Println("  ── Recommended fix: mkcert (trusted local CA, no internet needed) ──")
-			log.Println("  1. Install mkcert:  https://github.com/FiloSottile/mkcert")
-			log.Println("  2. On the server:   mkcert -install")
-			log.Println("     Then:            mkdir -p certs")
-			log.Println("                      mkcert -cert-file certs/cert.pem \\")
-			log.Println("                             -key-file  certs/key.pem \\")
-			log.Println("                             localhost 127.0.0.1 " + getLANIP())
-			log.Println("  3. On each phone:   copy the rootCA.pem from")
-			log.Println("                      $(mkcert -CAROOT)/rootCA.pem")
-			log.Println("                      install it as a trusted CA in Settings → Security.")
-			log.Println("  4. Restart Chirm — it will auto-detect certs/cert.pem.")
-			log.Println("")
-			log.Println("  ── Alternative: Tailscale (zero-config, auto-renewing certs) ──")
-			log.Println("  Install Tailscale on server + devices, then:")
-			log.Println("    tailscale cert $(tailscale status --json | jq -r .Self.DNSName)")
-			log.Println("  Set CHIRM_TLS_CERT and CHIRM_TLS_KEY to the generated files.")
+			lanIP := getLANIP()
+			log.Println("✦ TLS: using built-in self-signed CA (persistent).")
+			log.Printf("  Install the CA cert on each device to remove browser warnings:")
+			log.Printf("  ► Open http://%s:%s/ca-cert on each device and follow the OS prompts.", lanIP, port)
+			log.Println("  After installing, navigate to https://" + lanIP + ":" + httpsPort + " — no warnings.")
 		}
 	}
 
@@ -261,7 +282,7 @@ func main() {
 			if usingRealCert {
 				log.Printf("✦ Chirm HTTPS at https://%s:%s", getLANIP(), httpsPort)
 			} else {
-				log.Printf("✦ Chirm HTTPS (self-signed) at https://localhost:%s", httpsPort)
+				log.Printf("✦ Chirm HTTPS (self-signed CA) at https://%s:%s", getLANIP(), httpsPort)
 			}
 			if err := tlsServer.ListenAndServeTLS("", ""); err != nil {
 				log.Printf("HTTPS server error: %v", err)
@@ -270,11 +291,237 @@ func main() {
 	}
 
 	log.Printf("✦ Chirm running at http://localhost:%s", port)
+	log.Printf("  CA cert for device trust: http://%s:%s/ca-cert", getLANIP(), port)
 	log.Fatal(http.ListenAndServe(":"+port, r))
 }
 
-// generateSelfSignedCert creates an in-memory self-signed TLS certificate
-// valid for localhost and all current local network IPs.
+// ensurePersistentCert generates a local CA + server certificate on first run,
+// saves them to certsDir, and reloads them on subsequent runs.
+// The CA cert is served at /ca-cert so users can install it once per device.
+//
+// The leaf (server) cert is valid for ~397 days so that Chrome and Safari
+// accept it.  On each startup the cert is checked and re-signed from the
+// long-lived CA if it is within 30 days of expiry.
+func ensurePersistentCert(certsDir string) (tls.Certificate, error) {
+	if err := os.MkdirAll(certsDir, 0700); err != nil {
+		return tls.Certificate{}, fmt.Errorf("create certs dir: %w", err)
+	}
+
+	caKeyPath   := filepath.Join(certsDir, "chirm-ca-key.pem")
+	caCertPath  := filepath.Join(certsDir, "chirm-ca.pem")
+	srvKeyPath  := filepath.Join(certsDir, "chirm-key.pem")
+	srvCertPath := filepath.Join(certsDir, "chirm-cert.pem")
+
+	// ── Try to load existing CA ──────────────────────────────────────────────
+	var caKey  *ecdsa.PrivateKey
+	var caCert *x509.Certificate
+	var caDER  []byte
+
+	if fileExists(caKeyPath) && fileExists(caCertPath) {
+		caKey, caCert, caDER = loadCA(caCertPath, caKeyPath)
+	}
+
+	// ── Generate CA if we don't have one ─────────────────────────────────────
+	if caKey == nil || caCert == nil {
+		var err error
+		caKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("generate CA key: %w", err)
+		}
+
+		caTemplate := &x509.Certificate{
+			SerialNumber:          big.NewInt(1),
+			Subject:               pkix.Name{CommonName: "Chirm Local CA", Organization: []string{"Chirm"}},
+			NotBefore:             time.Now().Add(-time.Minute),
+			NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour), // CA lives 10 years
+			KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+			BasicConstraintsValid: true,
+			IsCA:                  true,
+		}
+
+		caDER, err = x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("create CA cert: %w", err)
+		}
+		caCert, _ = x509.ParseCertificate(caDER)
+
+		// Persist CA
+		if err := writePEM(caCertPath, "CERTIFICATE", caDER, 0644); err != nil {
+			return tls.Certificate{}, fmt.Errorf("write CA cert: %w", err)
+		}
+		caKeyBytes, _ := x509.MarshalECPrivateKey(caKey)
+		if err := writePEM(caKeyPath, "EC PRIVATE KEY", caKeyBytes, 0600); err != nil {
+			return tls.Certificate{}, fmt.Errorf("write CA key: %w", err)
+		}
+		log.Printf("✦ TLS: generated new CA in %s/", certsDir)
+	}
+
+	// ── Try to load existing server cert ─────────────────────────────────────
+	if fileExists(srvKeyPath) && fileExists(srvCertPath) {
+		cert, err := tls.LoadX509KeyPair(srvCertPath, srvKeyPath)
+		if err == nil {
+			// Check whether the leaf cert is still valid for at least 30 days.
+			leaf, parseErr := x509.ParseCertificate(cert.Certificate[0])
+			if parseErr == nil && time.Until(leaf.NotAfter) > 30*24*time.Hour {
+				// Also check that the cert's total validity isn't too long —
+				// Chrome/Safari reject leaf certs > 398 days.  Old certs
+				// generated with 10-year validity need to be re-signed.
+				totalDays := leaf.NotAfter.Sub(leaf.NotBefore).Hours() / 24
+				if totalDays > 400 {
+					log.Printf("⚠ Server cert validity is %.0f days (max 398) — regenerating", totalDays)
+				} else {
+					// Cert is still good.  Make sure the CA cert is in the chain
+					// (older versions wrote only the leaf to the PEM file).
+					if len(cert.Certificate) < 2 && caDER != nil {
+						cert.Certificate = append(cert.Certificate, caDER)
+						// Re-write the PEM so next load also picks up the chain.
+						rewriteServerCertPEM(srvCertPath, cert.Certificate)
+					}
+					log.Printf("✦ TLS: loaded persistent certs from %s (expires %s)",
+						certsDir, leaf.NotAfter.Format("2006-01-02"))
+					return cert, nil
+				}
+			} else if parseErr == nil {
+				log.Printf("⚠ Server cert expires %s — regenerating", leaf.NotAfter.Format("2006-01-02"))
+			}
+		} else {
+			log.Printf("⚠ Could not load existing server cert (%v) — regenerating", err)
+		}
+	}
+
+	// ── Generate (or re-generate) server cert signed by the CA ───────────────
+	srvKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate server key: %w", err)
+	}
+
+	// Include all local IPs so the cert works for LAN access.
+	localIPs := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		addrs, _ := iface.Addrs()
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok {
+				localIPs = append(localIPs, ipNet.IP)
+			}
+		}
+	}
+
+	srvTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: "chirm-local"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(397 * 24 * time.Hour), // ~13 months, under the 398-day browser limit
+		KeyUsage:     x509.KeyUsageDigitalSignature,        // ECDSA — no KeyEncipherment
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  localIPs,
+		DNSNames:     []string{"localhost"},
+	}
+
+	srvDER, err := x509.CreateCertificate(rand.Reader, srvTemplate, caCert, &srvKey.PublicKey, caKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create server cert: %w", err)
+	}
+
+	// ── Persist server cert (with full chain) + key ──────────────────────────
+	srvKeyBytes, _ := x509.MarshalECPrivateKey(srvKey)
+	if err := writePEM(srvKeyPath, "EC PRIVATE KEY", srvKeyBytes, 0600); err != nil {
+		return tls.Certificate{}, fmt.Errorf("write server key: %w", err)
+	}
+	// Write the server cert PEM with the CA cert appended so the full chain
+	// is served during the TLS handshake.  This is what fixes Chrome —
+	// without the CA in the chain Chrome gets ERR_FAILED instead of showing
+	// the "proceed anyway" interstitial.
+	if err := writeChainPEM(srvCertPath, srvDER, caDER); err != nil {
+		return tls.Certificate{}, fmt.Errorf("write server cert chain: %w", err)
+	}
+
+	log.Printf("✦ TLS: generated new server cert in %s/ (expires %s)",
+		certsDir, time.Now().Add(397*24*time.Hour).Format("2006-01-02"))
+
+	// Build tls.Certificate with full chain in memory.
+	return tls.Certificate{
+		Certificate: [][]byte{srvDER, caDER},
+		PrivateKey:  srvKey,
+	}, nil
+}
+
+// loadCA attempts to parse a CA cert + key from PEM files on disk.
+// Returns nils on any failure (caller will regenerate).
+func loadCA(certPath, keyPath string) (*ecdsa.PrivateKey, *x509.Certificate, []byte) {
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, nil, nil
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, nil, nil
+	}
+
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil {
+		return nil, nil, nil
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, nil, nil
+	}
+
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return nil, nil, nil
+	}
+	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, nil, nil
+	}
+
+	return key, cert, certBlock.Bytes
+}
+
+// writeChainPEM writes a PEM file containing the server cert followed by the
+// CA cert.  tls.LoadX509KeyPair reads all PEM blocks, so the full chain is
+// loaded automatically on next startup.
+func writeChainPEM(path string, serverDER, caDER []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := pem.Encode(f, &pem.Block{Type: "CERTIFICATE", Bytes: serverDER}); err != nil {
+		return err
+	}
+	return pem.Encode(f, &pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+}
+
+// rewriteServerCertPEM re-writes the server cert PEM file to include
+// the full chain (server cert + CA cert).  Used to upgrade cert files
+// written by older versions that only contained the leaf cert.
+func rewriteServerCertPEM(path string, chain [][]byte) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	for _, der := range chain {
+		pem.Encode(f, &pem.Block{Type: "CERTIFICATE", Bytes: der})
+	}
+}
+
+func writePEM(path, blockType string, der []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return pem.Encode(f, &pem.Block{Type: blockType, Bytes: der})
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // getLANIP returns the first non-loopback IPv4 address, or "localhost" as fallback.
 func getLANIP() string {
 	ifaces, err := net.Interfaces()
@@ -306,56 +553,54 @@ func getLANIP() string {
 	return "localhost"
 }
 
-func generateSelfSignedCert() (tls.Certificate, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	// Collect all local IPs so the cert is valid for LAN access
-	localIPs := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
-	ifaces, _ := net.Interfaces()
-	for _, iface := range ifaces {
-		addrs, _ := iface.Addrs()
-		for _, addr := range addrs {
-			if ipNet, ok := addr.(*net.IPNet); ok {
-				localIPs = append(localIPs, ipNet.IP)
-			}
-		}
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: "chirm-local"},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:  localIPs,
-		DNSNames:     []string{"localhost"},
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	keyBytes, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
-
-	return tls.X509KeyPair(certPEM, keyPEM)
-}
-
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return fallback
+}
+
+// loadDotenv reads a .env file and sets any environment variables that are not
+// already present in the environment.  It silently does nothing if the file
+// doesn't exist.  This keeps the "zero external dependencies" philosophy — no
+// need for godotenv or similar.
+func loadDotenv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return // file doesn't exist — perfectly fine
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip blanks and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Split on first '='
+		idx := strings.IndexByte(line, '=')
+		if idx < 1 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+
+		// Strip surrounding quotes (single or double)
+		if len(val) >= 2 {
+			if (val[0] == '"' && val[len(val)-1] == '"') ||
+				(val[0] == '\'' && val[len(val)-1] == '\'') {
+				val = val[1 : len(val)-1]
+			}
+		}
+
+		// Don't override existing env vars — explicit env always wins
+		if os.Getenv(key) == "" {
+			os.Setenv(key, val)
+		}
+	}
 }
 
 // --- Per-IP rate limiter ---

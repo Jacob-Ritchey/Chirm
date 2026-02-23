@@ -225,7 +225,9 @@ const ChirmNotifs = (() => {
   // ── OS notification ──────────────────────────────────────────────────────────
 
   function _showOsNotification(title, body, channelId, messageId) {
-    if (_permState !== 'granted') return;
+    // Always read the live browser permission — _permState can go stale if
+    // the user changes their browser settings mid-session or in another tab.
+    if (Notification?.permission !== 'granted') return;
 
     // User may have opted into in-browser toasts only — skip OS notifications.
     // Guard is typeof-safe in case an old cached user-settings.js is still active.
@@ -233,31 +235,31 @@ const ChirmNotifs = (() => {
         typeof ChirmSettings.isInBrowserOnly === 'function' &&
         ChirmSettings.isInBrowserOnly()) return;
 
-    if (_swReg) {
-      _swReg.showNotification(title, {
+    // Always use the direct Notification API from the page context.
+    // swReg.showNotification() is only reliable inside a SW push event — calling
+    // it from the page silently fails in Chrome after the first invocation, and
+    // the new Notification() fallback is then also blocked when a SW is registered.
+    // Using new Notification() directly is the correct approach here; push events
+    // in sw.js still use self.registration.showNotification() as intended.
+    //
+    // Tag includes the message ID so every ping re-fires the OS alert instead of
+    // silently replacing the previous notification for the same channel.
+    if (!('Notification' in window)) return;
+    try {
+      const tag = messageId ? `chirm-${channelId}-${messageId}` : `chirm-${channelId}-${Date.now()}`;
+      const n = new Notification(title, {
         body,
         icon: '/assets/jenn-circle.png',
-        tag: `chirm-${channelId}`,
-        renotify: true,
-        data: { url: '/', channel_id: channelId, message_id: messageId },
-        vibrate: [200, 100, 200],
-      }).catch(err => console.warn('[Chirm Notifs] showNotification failed:', err.message));
-    } else if ('Notification' in window) {
-      try {
-        const n = new Notification(title, {
-          body,
-          icon: '/assets/jenn-circle.png',
-          tag: `chirm-${channelId}`,
-        });
-        n.onclick = () => {
-          window.focus();
-          const ch = App.channels?.find(c => c.id === channelId);
-          if (ch) openChannel(ch);
-          n.close();
-        };
-      } catch (err) {
-        console.warn('[Chirm Notifs] Notification() failed:', err.message);
-      }
+        tag,
+      });
+      n.onclick = () => {
+        window.focus();
+        const ch = App.channels?.find(c => c.id === channelId);
+        if (ch) openChannel(ch);
+        n.close();
+      };
+    } catch (err) {
+      console.warn('[Chirm Notifs] Notification() failed:', err.message);
     }
   }
 

@@ -23,16 +23,17 @@ WORKDIR /app
 
 COPY --from=builder /build/chirm .
 
-# Create data directory
-RUN mkdir -p /data/uploads && chown -R chirm:chirm /data
+# Create data + certs directories
+RUN mkdir -p /data/uploads /app/certs && chown -R chirm:chirm /data /app/certs
 
 USER chirm
 
 VOLUME ["/data"]
 
-EXPOSE 8080
+EXPOSE 8080 8443
 
 ENV DATA_DIR=/data \
-    PORT=8080
+    PORT=8080 \
+    HTTPS_PORT=8443
 
 ENTRYPOINT ["./chirm"]

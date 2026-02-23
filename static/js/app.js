@@ -9,7 +9,7 @@ const App = {
   messages: {},          // channelId → []
   members: [],
   roles: [],
-  unread: new Set(),
+  unread: new Set((() => { try { return JSON.parse(localStorage.getItem('chirm_unread') || '[]'); } catch { return []; } })()),
   typingUsers: {},       // channelId → {userId: timestamp}
   voiceParticipants: {},  // channelId → Set of userIds
   token: null,
@@ -19,6 +19,26 @@ const App = {
   channelEditMode: false,
   customEmojis: [],      // [{id, name, filename, ...}]
 };
+
+// ─── PERSISTENCE HELPERS ───────────────────────────────────────────────────────
+
+function _persistUnread() {
+  try {
+    localStorage.setItem('chirm_unread', JSON.stringify([...App.unread]));
+  } catch {}
+}
+
+function _saveLastChannel(channelId) {
+  try {
+    localStorage.setItem('chirm_last_channel', channelId);
+  } catch {}
+}
+
+function _loadLastChannel() {
+  try {
+    return localStorage.getItem('chirm_last_channel') || null;
+  } catch { return null; }
+}
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 const api = {
@@ -258,10 +278,14 @@ async function init() {
   const msgInput = document.getElementById('message-input');
   if (msgInput) ChirmMentions.init(msgInput);
 
-  // Open first text channel
-  const firstText = App.channels.find(c => c.type !== 'voice') || App.channels[0];
-  if (firstText) {
-    openChannel(firstText);
+  // Restore the channel the user was in before the page refreshed.
+  // Fall back to the first text channel if the saved one no longer exists.
+  const lastChannelId = _loadLastChannel();
+  const lastChannel   = lastChannelId ? App.channels.find(c => c.id === lastChannelId && c.type !== 'voice') : null;
+  const firstText     = App.channels.find(c => c.type !== 'voice') || App.channels[0];
+  const channelToOpen = lastChannel || firstText;
+  if (channelToOpen) {
+    openChannel(channelToOpen);
   }
 
   // Admin panel button
@@ -780,6 +804,8 @@ async function openChannel(ch) {
 
   App.currentChannel = ch;
   App.unread.delete(ch.id);
+  _persistUnread();
+  _saveLastChannel(ch.id);
 
   // Close mobile sidebar when channel selected
   if (PanelMgr.isMobile()) PanelMgr.close('channels');
@@ -1755,6 +1781,7 @@ function setupWSHandlers() {
     // ── Unread indicator ───────────────────────────────────────────────────
     if (!isMuted) {
       App.unread.add(channelId);
+      _persistUnread();
       const el = document.querySelector(`[data-channel-id="${channelId}"]`);
       if (el) el.classList.add('unread');
     }
@@ -1925,6 +1952,14 @@ function setupWSHandlers() {
     renderChannelList();
   });
 
+
+  // ── Live member list updates ─────────────────────────────────────────────
+  WS.on('member.new', (member) => {
+    // Ignore if we already have this member (e.g. our own registration echo)
+    if (App.members.find(m => m.id === member.id)) return;
+    App.members.push(member);
+    renderMembersList();
+  });
 
   WS.on('typing', ({ user_id, channel_id }) => {
     if (user_id === App.user.id) return;

@@ -94,18 +94,22 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setTokenCookie(w, token)
+	setTokenCookie(w, r, token)
 	created(w, map[string]interface{}{"user": user, "token": token})
 }
 
-func setTokenCookie(w http.ResponseWriter, token string) {
+func setTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
+	// Only set Secure flag when actually served over HTTPS.  Hardcoding
+	// Secure: true caused Chrome to silently reject the cookie over plain
+	// HTTP, making login appear completely broken on :8080.
+	isSecure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 	http.SetCookie(w, &http.Cookie{
 		Name:     "chirm_token",
 		Value:    token,
 		Path:     "/",
 		MaxAge:   30 * 24 * 3600,
 		HttpOnly: true,
-		Secure:   true, // Fix #8: only transmit over HTTPS, prevents LAN interception
+		Secure:   isSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

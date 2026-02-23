@@ -43,7 +43,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setTokenCookie(w, token)
+	setTokenCookie(w, r, token)
 	ok(w, map[string]interface{}{"user": u, "token": token})
 }
 
@@ -130,18 +130,31 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setTokenCookie(w, token)
+	// Notify all connected clients so their member sidebars update live.
+	h.hub.Broadcast(WSEvent{
+		Type: "member.new",
+		Data: map[string]interface{}{
+			"id":       u.ID,
+			"username": u.Username,
+			"avatar":   u.Avatar,
+			"is_owner": u.IsOwner,
+			"roles":    []interface{}{},
+		},
+	})
+
+	setTokenCookie(w, r, token)
 	created(w, map[string]interface{}{"user": u, "token": token})
 }
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	isSecure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 	http.SetCookie(w, &http.Cookie{
 		Name:     "chirm_token",
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   isSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 	ok(w, map[string]string{"message": "logged out"})

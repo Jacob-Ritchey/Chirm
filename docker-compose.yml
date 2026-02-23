@@ -6,12 +6,18 @@ services:
     image: chirm:latest
     container_name: chirm
     restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
     ports:
-      - "8080:8080"           # Change left port to expose differently, e.g. "80:8080"
+      - "8080:8080"           # HTTP  — change left port to expose differently, e.g. "80:8080"
+      - "8443:8443"           # HTTPS — self-signed CA or custom cert
     volumes:
       - chirm-data:/data      # Persistent SQLite DB + uploaded files
+      - ./certs:/app/certs    # TLS certs (auto-generated on first run, or supply your own)
     environment:
       PORT: "8080"
+      HTTPS_PORT: "8443"
       DATA_DIR: "/data"
       JWT_SECRET: "${JWT_SECRET:-change-me-use-a-long-random-string}"
     healthcheck:
