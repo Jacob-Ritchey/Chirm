@@ -208,6 +208,11 @@ function renderContent(content) {
   s = s.replace(new RegExp(`<br>(</?(?:${BLOCK})[^>]*>)`, 'g'), '$1');
   s = s.replace(new RegExp(`(</?(?:${BLOCK})[^>]*>)<br>`, 'g'), '$1');
 
+  // ── Step 16: @mention highlighting ──────────────────────────────────────────
+  if (typeof ChirmMentions !== 'undefined') {
+    s = ChirmMentions.renderMentions(s);
+  }
+
   return s;
 }
 
@@ -249,6 +254,10 @@ async function init() {
   setupWSHandlers();
   Voice.init();
 
+  // Init @mention autocomplete
+  const msgInput = document.getElementById('message-input');
+  if (msgInput) ChirmMentions.init(msgInput);
+
   // Open first text channel
   const firstText = App.channels.find(c => c.type !== 'voice') || App.channels[0];
   if (firstText) {
@@ -259,6 +268,18 @@ async function init() {
   if (isAdmin(App.user)) {
     document.getElementById('admin-btn').style.display = 'block';
   }
+
+  // Offer notification permission if not yet decided (delayed to avoid being intrusive)
+  setTimeout(async () => {
+    if (Notification.permission === 'default') {
+      const t = document.createElement('div');
+      t.className = 'toast info';
+      t.innerHTML = '🔔 <strong>Enable notifications?</strong> <button onclick="ChirmNotifs.requestPermission().then(r=>{if(r===\'granted\'){toast(\'Notifications enabled!\',\'success\');}else{toast(\'Blocked — you can enable later in ⚙ settings\',\'info\');}renderUserPanel();this.closest(\'.toast\').remove()})" style="margin-left:8px;padding:2px 8px;border-radius:4px;border:none;background:var(--accent);color:white;cursor:pointer;font-size:12px">Enable</button>';
+      t.style.cssText += 'max-width:340px;cursor:default';
+      document.getElementById('toast-container')?.appendChild(t);
+      setTimeout(() => t.remove?.(), 14000);
+    }
+  }, 3000);
 }
 
 // ─── DATA LOADING ─────────────────────────────────────────────────────────────
@@ -384,6 +405,8 @@ function renderChannelList() {
       ? `<span class="ch-icon ch-emoji${isVoice ? ' ch-voice-emoji' : ''}">${ch.emoji}${isVoice ? '<span class="voice-badge">🔊</span>' : ''}</span>`
       : `<span class="ch-icon ch-hash">${defaultIcon}</span>`;
     const badge = isVoice && pCount > 0 ? `<span class="voice-count">${pCount}</span>` : '';
+    const muteIcon = (!isVoice && typeof ChirmSettings !== 'undefined' && ChirmSettings.isChannelMuted(ch.id))
+      ? '<span class="ch-mute-badge" title="Muted">🔕</span>' : '';
 
     if (App.channelEditMode && admin) {
       item.draggable = true;
@@ -407,6 +430,7 @@ function renderChannelList() {
         ${iconHtml}
         <span class="ch-name">${esc(ch.name)}</span>
         ${badge}
+        ${muteIcon}
         <span class="unread-dot"></span>
         ${admin ? `<span class="channel-edit-actions">
           <button class="channel-edit-btn" onclick="event.stopPropagation();openEditChannel('${ch.id}')" title="Edit">✎</button>
@@ -655,6 +679,15 @@ function renderUserPanel() {
       <div class="user-tag">${App.user.is_owner ? 'Owner' : 'Member'}</div>
     </div>
   `;
+
+  // Update notification bell icon based on permission state
+  const notifBtn = document.getElementById('notif-settings-btn');
+  if (notifBtn) {
+    const perm = ('Notification' in window) ? Notification.permission : 'denied';
+    notifBtn.textContent = perm === 'granted' ? '🔔' : perm === 'denied' ? '🔕' : '🔔';
+    notifBtn.title = `Notification Settings (${perm})`;
+    notifBtn.style.opacity = perm === 'denied' ? '0.5' : '1';
+  }
 }
 
 function renderMembersList() {
@@ -758,19 +791,61 @@ async function openChannel(ch) {
     if (id === ch.id) el.classList.remove('unread');
   });
 
-  // Update header
-  document.getElementById('ch-title').textContent = ch.name;
+  // Update header (add mute indicator)
+  const isMuted = typeof ChirmSettings !== 'undefined' && ChirmSettings.isChannelMuted(ch.id);
+  document.getElementById('ch-title').textContent = (isMuted ? '🔕 ' : '') + ch.name;
   document.getElementById('ch-desc').textContent = ch.description || '';
   document.getElementById('message-input').placeholder = `Message #${ch.name}`;
 
   // Subscribe via WebSocket
   WS.subscribe(ch.id);
 
-  // Load messages
-  const msgs = await loadMessages(ch.id);
-  App.messages[ch.id] = msgs;
-  renderMessages(ch.id);
-  scrollToBottom(true);
+  // ── Cache-first loading with guaranteed network reconciliation ─────────────
+  // Rule: cache gives instant render; network ALWAYS runs to catch messages
+  // that arrived while you were in another channel or offline (WS doesn't
+  // replay history, so we must ask the server).
+
+  const cached = typeof ChirmCache !== 'undefined' ? ChirmCache.get(ch.id) : null;
+  const channelId = ch.id;
+
+  if (cached && cached.messages.length > 0) {
+    // Instant render from cache
+    App.messages[channelId] = [...cached.messages];
+    renderMessages(channelId);
+    scrollToBottom(true);
+  }
+
+  // ALWAYS fetch from network — don't skip even if cache is "fresh".
+  // Messages sent to this channel while you were away are NOT in cache
+  // because the WS only delivers to the currently subscribed channel.
+  loadMessages(channelId).then(freshMsgs => {
+    if (!freshMsgs || !freshMsgs.length) return;
+    if (App.currentChannel?.id !== channelId) return; // user switched away
+
+    // Merge: start with the network response (authoritative history), then
+    // append any WS messages that arrived AFTER the network fetch was initiated
+    // (they'll have IDs not present in freshMsgs).
+    const freshIds = new Set(freshMsgs.map(m => m.id));
+    const wsOnlyMsgs = (App.messages[channelId] || []).filter(m => !freshIds.has(m.id));
+    const merged = [...freshMsgs, ...wsOnlyMsgs].sort(
+      (a, b) => new Date(a.created_at) - new Date(b.created_at)
+    );
+
+    App.messages[channelId] = merged;
+    if (typeof ChirmCache !== 'undefined') ChirmCache.set(channelId, merged);
+
+    // Re-render only if the message set actually changed
+    const cachedCount = cached?.messages?.length ?? 0;
+    if (merged.length !== cachedCount || wsOnlyMsgs.length > 0) {
+      renderMessages(channelId);
+      scrollToBottom(true);
+    }
+  }).catch(() => {
+    // Network unavailable — cache-only is fine for now
+    if (!cached || !cached.messages.length) {
+      App.messages[channelId] = App.messages[channelId] || [];
+    }
+  });
 }
 
 // ─── MESSAGES ─────────────────────────────────────────────────────────────────
@@ -1667,6 +1742,22 @@ function openImageViewer(src) {
 
 // ─── WEBSOCKET HANDLERS ───────────────────────────────────────────────────────
 function setupWSHandlers() {
+  // message.activity is broadcast globally to ALL clients when any message is sent.
+  // message.new is only sent to clients subscribed to that specific channel.
+  // This handler is therefore the sole source of unread indicators for channels
+  // the user isn't currently viewing.
+  WS.on('message.activity', ({ channel_id }) => {
+    if (!channel_id) return;
+    if (App.currentChannel?.id === channel_id) return; // already visible
+
+    const isMuted = typeof ChirmSettings !== 'undefined' && ChirmSettings.isChannelMuted(channel_id);
+    if (isMuted) return; // muted channels don't show the dot
+
+    App.unread.add(channel_id);
+    const el = document.querySelector(`[data-channel-id="${channel_id}"]`);
+    if (el) el.classList.add('unread');
+  });
+
   WS.on('message.new', (msg) => {
     const channelId = msg.channel_id;
     if (!App.messages[channelId]) App.messages[channelId] = [];
@@ -1674,22 +1765,47 @@ function setupWSHandlers() {
     // Check for duplicate
     if (App.messages[channelId].find(m => m.id === msg.id)) return;
 
-    // Get prev BEFORE push — slice(-2)[0] after push would return msg itself when array was empty
     const prev = App.messages[channelId].at(-1);
     App.messages[channelId].push(msg);
 
-    if (App.currentChannel?.id === channelId) {
+    // Update cache
+    if (typeof ChirmCache !== 'undefined') ChirmCache.appendMessage(channelId, msg);
+
+    const isCurrentChannel = App.currentChannel?.id === channelId;
+    const pageVisible = document.visibilityState === 'visible';
+    const pageHasFocus = document.hasFocus();
+
+    if (isCurrentChannel && pageVisible && pageHasFocus) {
+      // User is actively watching this channel — just render the message
       const nearBottom = isNearBottom();
       const list = document.getElementById('messages-list');
-      const ts     = new Date(msg.created_at).getTime();
+      const ts = new Date(msg.created_at).getTime();
       const prevTs = prev ? new Date(prev.created_at).getTime() : 0;
       const continued = !!prev && prev.user_id === msg.user_id && ts - prevTs < 5 * 60 * 1000;
       list.appendChild(renderMessage(msg, continued));
       if (nearBottom) scrollToBottom();
     } else {
-      App.unread.add(channelId);
-      const el = document.querySelector(`[data-channel-id="${channelId}"]`);
-      if (el) el.classList.add('unread');
+      // Page is hidden, unfocused, or user is in a different channel.
+      // Unread dot is handled by the message.activity handler above (which
+      // fires for ALL channels globally). We just need to handle rendering
+      // and notifications here.
+
+      if (isCurrentChannel) {
+        // User IS on this channel but page is backgrounded — still render
+        const nearBottom = isNearBottom();
+        const list = document.getElementById('messages-list');
+        const ts = new Date(msg.created_at).getTime();
+        const prevTs = prev ? new Date(prev.created_at).getTime() : 0;
+        const continued = !!prev && prev.user_id === msg.user_id && ts - prevTs < 5 * 60 * 1000;
+        list.appendChild(renderMessage(msg, continued));
+        if (nearBottom) scrollToBottom();
+      }
+
+      // Trigger notification (handles mute / mention / visibility logic internally)
+      if (typeof ChirmNotifs !== 'undefined') {
+        const ch = App.channels.find(c => c.id === channelId);
+        ChirmNotifs.onNewMessage(msg, ch?.name || 'channel');
+      }
     }
   });
 
@@ -1699,6 +1815,7 @@ function setupWSHandlers() {
       const idx = App.messages[channelId].findIndex(m => m.id === msg.id);
       if (idx >= 0) App.messages[channelId][idx] = msg;
     }
+    if (typeof ChirmCache !== 'undefined') ChirmCache.updateMessage(channelId, msg);
     if (App.currentChannel?.id === channelId) {
       const el = document.querySelector(`[data-message-id="${msg.id}"]`);
       if (el) {
@@ -1716,6 +1833,7 @@ function setupWSHandlers() {
     if (App.messages[channel_id]) {
       App.messages[channel_id] = App.messages[channel_id].filter(m => m.id !== id);
     }
+    if (typeof ChirmCache !== 'undefined') ChirmCache.deleteMessage(channel_id, id);
     const el = document.querySelector(`[data-message-id="${id}"]`);
     if (el) el.remove();
   });
@@ -1725,6 +1843,7 @@ function setupWSHandlers() {
       const msg = App.messages[channel_id].find(m => m.id === message_id);
       if (msg) msg.reactions = reactions;
     }
+    if (typeof ChirmCache !== 'undefined') ChirmCache.updateReactions(channel_id, message_id, reactions);
     if (App.currentChannel?.id === channel_id) {
       updateReactionsInDOM(message_id, reactions);
     }

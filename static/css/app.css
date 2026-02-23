@@ -1848,3 +1848,161 @@ pre code { background: none; border: none; padding: 0; }
 }
 .channel-item.edit-mode { cursor: default; }
 .channel-item.edit-mode:hover { background: var(--bg-hover); }
+
+/* ─── @MENTION AUTOCOMPLETE ──────────────────────────────────────────────────── */
+.mention-popover {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+  max-height: 320px;
+  padding: 4px;
+  animation: mention-pop 0.12s ease;
+}
+
+@keyframes mention-pop {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.1s;
+  font-size: 14px;
+}
+.mention-item:hover,
+.mention-item.selected {
+  background: var(--bg-hover);
+}
+.mention-avatar {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; color: white;
+  flex-shrink: 0;
+}
+.mention-name { font-weight: 500; flex: 1; }
+.mention-badge {
+  font-size: 10px; color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 3px;
+  padding: 1px 4px; flex-shrink: 0;
+}
+
+/* ─── @MENTION RENDERING IN MESSAGES ──────────────────────────────────────── */
+.mention {
+  display: inline-block;
+  background: var(--accent-dim);
+  color: var(--accent-text);
+  border-radius: 3px;
+  padding: 0 3px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.mention:hover { background: rgba(124,106,245,0.32); }
+
+/* Own mention — highlighted */
+.mention-self {
+  background: rgba(255, 200, 60, 0.18);
+  color: #f5c842;
+}
+.mention-self:hover { background: rgba(255, 200, 60, 0.30); }
+
+/* ─── CHANNEL MUTE BADGE ──────────────────────────────────────────────────── */
+.ch-mute-badge {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-left: 2px;
+}
+
+/* ─── USER SETTINGS MODAL ─────────────────────────────────────────────────── */
+.settings-section {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-section:last-child { border-bottom: none; margin-bottom: 0; }
+
+.settings-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.settings-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+.settings-row-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+.settings-row-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.settings-info-box {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.settings-info-box.success { border-color: rgba(63, 186, 122, 0.3); color: var(--success); }
+
+.settings-ch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  background: var(--bg-input);
+}
+.settings-ch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s;
+  font-size: 13px;
+  gap: 8px;
+}
+.settings-ch-row:hover { background: var(--bg-hover); }
+.settings-ch-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-toggle-wrap { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.settings-toggle-label { font-size: 11px; color: var(--text-muted); min-width: 36px; text-align: right; }
+
+/* ─── MENTION TOAST ───────────────────────────────────────────────────────── */
+.toast.mention-toast {
+  cursor: pointer;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-elevated);
+  max-width: 300px;
+  line-height: 1.4;
+}
+.toast.mention-toast:hover { filter: brightness(1.1); }
+

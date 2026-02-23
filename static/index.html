@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Chirm</title>
   <link rel="stylesheet" href="/css/app.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#7c6af5">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 </head>
 <body>
 
@@ -55,6 +60,7 @@
       </div>
       <div id="user-panel-actions">
         <button onclick="openProfile()" title="Edit Profile">⚙</button>
+        <button onclick="ChirmSettings.openSettingsModal()" title="Notification Settings" id="notif-settings-btn">🔔</button>
         <button id="admin-btn" onclick="openAdmin()" title="Admin Panel" style="display:none">🛡</button>
         <button onclick="logout()" title="Logout">⏻</button>
       </div>
@@ -164,6 +170,57 @@
 <script src="/js/ws.js"></script>
 <script src="/js/voice.js"></script>
 <script src="/js/emoji-data.js"></script>
+<script src="/js/cache.js"></script>
+<script src="/js/user-settings.js"></script>
+<script src="/js/notifications.js"></script>
+<script src="/js/mentions.js"></script>
 <script src="/js/app.js"></script>
+<script>
+  // Register Service Worker (v2 — fixes navigation caching / login loop)
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', async () => {
+      try {
+        // Unregister any old SW first to ensure clean slate on cache changes
+        const existing = await navigator.serviceWorker.getRegistration('/');
+        if (existing) {
+          const controller = existing.active;
+          if (controller) {
+            // Check if it's an old version by triggering an update check
+            existing.update().catch(() => {});
+          }
+        }
+
+        const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+        console.log('[Chirm] SW registered:', reg.scope);
+
+        // If a new SW is waiting, tell it to take over immediately
+        if (reg.waiting) {
+          reg.waiting.postMessage({ type: 'skip-waiting' });
+        }
+        reg.addEventListener('updatefound', () => {
+          const newSW = reg.installing;
+          newSW?.addEventListener('statechange', () => {
+            if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+              newSW.postMessage({ type: 'skip-waiting' });
+            }
+          });
+        });
+
+        // Pass SW registration to notification system once App is ready
+        const waitForApp = setInterval(() => {
+          if (typeof ChirmNotifs !== 'undefined' && typeof App !== 'undefined' && App.user) {
+            clearInterval(waitForApp);
+            ChirmNotifs.init(reg);
+          }
+        }, 300);
+
+        // Hard limit: if app takes > 10s to init, give up on the interval
+        setTimeout(() => clearInterval(waitForApp), 10000);
+      } catch (err) {
+        console.warn('[Chirm] SW registration failed:', err);
+      }
+    });
+  }
+</script>
 </body>
 </html>

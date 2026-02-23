@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -140,10 +141,21 @@ CREATE TABLE IF NOT EXISTS custom_emojis (
 	FOREIGN KEY (uploader_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+	id         TEXT PRIMARY KEY,
+	user_id    TEXT NOT NULL,
+	endpoint   TEXT NOT NULL,
+	data       TEXT NOT NULL,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+	UNIQUE(user_id, endpoint)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
 CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id);
 CREATE INDEX IF NOT EXISTS idx_custom_emojis_name ON custom_emojis(name);
+CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id);
 `
 	_, err := d.Exec(schema)
 	if err != nil {
@@ -971,4 +983,54 @@ func (d *DB) GetCustomEmojiByName(name string) (*CustomEmoji, error) {
 		return nil, err
 	}
 	return e, nil
+}
+
+// ─── Push Subscriptions ───────────────────────────────────────────────────────
+
+type PushSubscription struct {
+	ID       string
+	UserID   string
+	Endpoint string
+	Data     string
+}
+
+func (d *DB) SavePushSubscription(userID, data string) error {
+	// Parse endpoint from data JSON to use as dedup key
+	var sub struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.Unmarshal([]byte(data), &sub); err != nil || sub.Endpoint == "" {
+		return fmt.Errorf("invalid subscription data")
+	}
+	id := NewID()
+	_, err := d.Exec(`
+		INSERT INTO push_subscriptions (id, user_id, endpoint, data)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(user_id, endpoint) DO UPDATE SET data=excluded.data`,
+		id, userID, sub.Endpoint, data)
+	return err
+}
+
+func (d *DB) DeletePushSubscription(userID, endpoint string) error {
+	_, err := d.Exec(`DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?`, userID, endpoint)
+	return err
+}
+
+// GetChannelPushSubscriptions returns all push subscriptions for users who are
+// NOT the specified channel (all users get pushes — channel-level mute is
+// enforced client-side). The channelName param is unused here but kept for future filtering.
+func (d *DB) GetChannelPushSubscriptions(_ string) ([]PushSubscription, error) {
+	rows, err := d.Query(`SELECT id, user_id, endpoint, data FROM push_subscriptions`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var subs []PushSubscription
+	for rows.Next() {
+		var s PushSubscription
+		if err := rows.Scan(&s.ID, &s.UserID, &s.Endpoint, &s.Data); err == nil {
+			subs = append(subs, s)
+		}
+	}
+	return subs, rows.Err()
 }

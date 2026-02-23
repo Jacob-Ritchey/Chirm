@@ -71,6 +71,11 @@ func main() {
 
 	h := handlers.New(database, authSvc, hub, dataDir)
 
+	// Initialise VAPID keys for Web Push notifications (non-fatal if it fails)
+	if err := h.InitVAPID(); err != nil {
+		log.Printf("⚠ VAPID init error (push notifications disabled): %v", err)
+	}
+
 	r := chi.NewRouter()
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
@@ -148,6 +153,13 @@ func main() {
 		r.Get("/api/members", h.ListMembers)
 
 		r.Get("/api/voice/rooms", h.VoiceRooms)
+
+		// Web Push / PWA notifications
+		r.Get("/api/push/vapid-public-key", h.GetVAPIDPublicKey)
+		r.Post("/api/push/subscribe", h.SavePushSubscription)
+		r.Post("/api/push/unsubscribe", h.RemovePushSubscription)
+		r.Get("/api/push/poll", h.PollUnread)
+		r.Post("/api/push/test", h.TestPush)
 	})
 
 	// Uploaded files
@@ -162,6 +174,8 @@ func main() {
 	r.Handle("/assets/*", fileServer)
 	r.Handle("/css/*", fileServer)
 	r.Handle("/js/*", fileServer)
+	r.Handle("/sw.js", fileServer)
+	r.Handle("/manifest.json", fileServer)
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		// Determine which page to serve based on path
 		path := r.URL.Path
