@@ -83,9 +83,17 @@ alt="Jenn The Wren">
 
 ## Quick Start
 
-### Build from Source
+**Requirements:** Go 1.22+
 
-**Requirements:** Go 1.21+
+## Docker Setup (Recommended)
+
+```bash
+git clone https://github.com/Jacob-Ritchey/Chirm
+cd Chirm
+docker compose up -d
+```
+
+### Build from Source
 
 ```bash
 #Clone
