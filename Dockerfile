@@ -1,39 +1,41 @@
-# ── Build Stage ──────────────────────────────────────────────────────────────
+# ─── Stage 1: Build ──────────────────────────────────────────────────────────
 FROM golang:1.21-alpine AS builder
 
 WORKDIR /build
 
-# Dependencies first (cache layer)
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Source
+# Copy everything and build
 COPY . .
+RUN go mod tidy && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o chirm .
 
-# Build static binary (no CGO needed - pure Go SQLite driver)
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o chirm .
-
-# ── Final Stage ───────────────────────────────────────────────────────────────
+# ─── Stage 2: Runtime ────────────────────────────────────────────────────────
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates tzdata && \
-    addgroup -S chirm && adduser -S chirm -G chirm
+RUN apk add --no-cache ca-certificates tzdata
+
+# Non-root user for security
+RUN addgroup -S chirm && adduser -S chirm -G chirm
 
 WORKDIR /app
 
-COPY --from=builder /build/chirm .
+# Copy the binary and entrypoint from builder
+COPY --from=builder /build/chirm /app/chirm
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 
-# Create data + certs directories
-RUN mkdir -p /data/uploads /app/certs && chown -R chirm:chirm /data /app/certs
+# Create persistent directories
+RUN chmod +x /app/docker-entrypoint.sh && \
+    mkdir -p /app/data/uploads /app/certs && \
+    chown -R chirm:chirm /app
 
 USER chirm
 
-VOLUME ["/data"]
-
-EXPOSE 8080 8443
-
-ENV DATA_DIR=/data \
+# Defaults — override via docker-compose.yml or `docker run -e`
+ENV DATA_DIR=/app/data \
     PORT=8080 \
     HTTPS_PORT=8443
 
-ENTRYPOINT ["./chirm"]
+EXPOSE 8080 8443
+
+VOLUME ["/app/data", "/app/certs"]
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

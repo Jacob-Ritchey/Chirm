@@ -1,41 +1,42 @@
-version: '3.9'
+# ─── Chirm — Docker Compose ──────────────────────────────────────────────────
+# Usage:
+#   docker compose up -d          # Start Chirm
+#   docker compose logs -f        # Watch logs
+#   docker compose down            # Stop
+#   docker compose down -v         # Stop and wipe all data
+#
+# First run: open https://localhost:8443 → follow setup wizard
+# ─────────────────────────────────────────────────────────────────────────────
 
 services:
   chirm:
     build: .
-    image: chirm:latest
     container_name: chirm
     restart: unless-stopped
-    env_file:
-      - path: .env
-        required: false
+
     ports:
-      - "8080:8080"           # HTTP  — change left port to expose differently, e.g. "80:8080"
-      - "8443:8443"           # HTTPS — self-signed CA or custom cert
-    volumes:
-      - chirm-data:/data      # Persistent SQLite DB + uploaded files
-      - ./certs:/app/certs    # TLS certs (auto-generated on first run, or supply your own)
+      - "8080:8080"     # HTTP  (also serves /ca-cert)
+      - "8443:8443"     # HTTPS (self-signed CA or your own cert)
+
     environment:
+      # To set your own secret instead of auto-generating, uncomment:
+      # JWT_SECRET: "paste-output-of-openssl-rand-hex-32-here"
+
+      DATA_DIR: /app/data
       PORT: "8080"
       HTTPS_PORT: "8443"
-      DATA_DIR: "/data"
-      JWT_SECRET: "${JWT_SECRET:-change-me-use-a-long-random-string}"
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/setup/status"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+
+      # If behind a reverse proxy on a different domain, set this:
+      # ALLOWED_ORIGIN: "https://chat.yourdomain.com"
+
+      # To use your own TLS certs (Let's Encrypt, Tailscale, etc.):
+      # CHIRM_TLS_CERT: /app/certs/cert.pem
+      # CHIRM_TLS_KEY: /app/certs/key.pem
+
+    volumes:
+      - chirm-data:/app/data       # SQLite DB + uploads
+      - chirm-certs:/app/certs     # TLS certificates (auto-generated or custom)
 
 volumes:
   chirm-data:
-    driver: local
-
-# ── Traefik example (optional, for reverse proxy with SSL) ────────────────────
-# Uncomment and configure if using Traefik:
-#
-#   labels:
-#     - "traefik.enable=true"
-#     - "traefik.http.routers.chirm.rule=Host(`chat.yourdomain.com`)"
-#     - "traefik.http.routers.chirm.entrypoints=websecure"
-#     - "traefik.http.routers.chirm.tls.certresolver=letsencrypt"
+  chirm-certs:

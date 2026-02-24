@@ -1,0 +1,11 @@
+.git
+.env
+data/
+certs/
+*.db
+*.db-wal
+*.db-shm
+README.md
+LICENSE
+docker-compose.yml
+.dockerignore
