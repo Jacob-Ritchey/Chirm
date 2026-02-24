@@ -411,8 +411,9 @@ func (c *Client) handleMessage(evt rawClientMessage) {
 	// show/hide the video tile vs avatar without relying on track detection.
 	case "voice.media_state":
 		var d struct {
-			ChannelID  string `json:"channel_id"`
-			CamEnabled bool   `json:"cam_enabled"`
+			ChannelID      string `json:"channel_id"`
+			CamEnabled     bool   `json:"cam_enabled"`
+			ScreenSharing  bool   `json:"screen_sharing"`
 		}
 		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
 			return
@@ -420,9 +421,10 @@ func (c *Client) handleMessage(evt rawClientMessage) {
 		c.hub.BroadcastToVoiceRoom(d.ChannelID, WSEvent{
 			Type: "voice.media_state",
 			Data: map[string]interface{}{
-				"channel_id":   d.ChannelID,
-				"from_user_id": c.userID,
-				"cam_enabled":  d.CamEnabled,
+				"channel_id":     d.ChannelID,
+				"from_user_id":   c.userID,
+				"cam_enabled":    d.CamEnabled,
+				"screen_sharing": d.ScreenSharing,
 			},
 		}, c)
 	}

@@ -2039,3 +2039,311 @@ pre code { background: none; border: none; padding: 0; }
   white-space: nowrap;
 }
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   V14: VOICE UX OVERHAUL — Speaking, Focus, Per-user Controls, Screen Share
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Speaking indicator ────────────────────────────────────────────────── */
+.vc-tile.vc-speaking {
+  border-color: var(--success) !important;
+  box-shadow: 0 0 0 2px var(--success), 0 0 12px rgba(63, 186, 122, 0.35);
+}
+
+.vc-tile.vc-speaking .vc-name {
+  color: var(--success);
+}
+
+/* ── Focus / Spotlight mode ────────────────────────────────────────────── */
+#voice-grid.vc-focus-mode {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr auto;
+  gap: 10px;
+}
+
+#voice-grid.vc-focus-mode .vc-tile.vc-focused {
+  grid-column: 1;
+  aspect-ratio: 16 / 9;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), 0 4px 20px rgba(0,0,0,0.4);
+  order: -1;
+}
+
+/* Unfocused tiles go into a row beneath */
+#voice-grid.vc-focus-mode .vc-tile.vc-unfocused {
+  aspect-ratio: 4 / 3;
+  max-height: 140px;
+}
+
+/* Grid the unfocused tiles horizontally */
+#voice-grid.vc-focus-mode {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-auto-flow: dense;
+}
+
+#voice-grid.vc-focus-mode .vc-tile.vc-unfocused {
+  display: inline-flex;
+}
+
+/* Create a sub-row for unfocused tiles using a wrapper approach via CSS */
+#voice-grid.vc-focus-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#voice-grid.vc-focus-mode .vc-tile.vc-focused {
+  flex: 1 1 auto;
+  min-height: 0;
+  aspect-ratio: auto;
+}
+
+#voice-grid.vc-focus-mode .vc-tile.vc-unfocused {
+  flex: 0 0 120px;
+  width: calc(25% - 8px);
+  min-width: 140px;
+  max-width: 200px;
+  display: inline-flex;
+  float: left;
+  margin-right: 8px;
+  aspect-ratio: 4/3;
+}
+
+/* Use flexbox wrap for the unfocused row */
+#voice-grid.vc-focus-mode {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr auto;
+}
+
+#voice-grid.vc-focus-mode .vc-focused {
+  grid-row: 1;
+  grid-column: 1;
+  aspect-ratio: auto;
+  min-height: 300px;
+}
+
+#voice-grid.vc-focus-mode .vc-unfocused {
+  grid-row: 2;
+  max-height: 130px;
+  aspect-ratio: 4/3;
+}
+
+/* Lay out unfocused tiles in a horizontal sub-grid */
+#voice-grid.vc-focus-mode {
+  grid-template-columns: 1fr;
+  grid-auto-columns: minmax(120px, 180px);
+}
+
+/* Better approach: use CSS subgrid workaround */
+#voice-grid.vc-focus-mode {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-content: start;
+}
+
+#voice-grid.vc-focus-mode .vc-focused {
+  width: 100%;
+  flex: 1 0 100%;
+  aspect-ratio: 16/9;
+  max-height: 65vh;
+  min-height: 200px;
+  order: 0;
+}
+
+#voice-grid.vc-focus-mode .vc-unfocused {
+  flex: 0 0 auto;
+  width: 160px;
+  height: 120px;
+  aspect-ratio: 4/3;
+  order: 1;
+}
+
+/* ── Tile click cursor ─────────────────────────────────────────────────── */
+.vc-tile {
+  cursor: pointer;
+}
+
+/* ── Per-user controls overlay ─────────────────────────────────────────── */
+.vc-peer-controls {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 5;
+}
+
+.vc-tile:hover .vc-peer-controls {
+  opacity: 1;
+}
+
+.vc-peer-btn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, transform 0.1s;
+  backdrop-filter: blur(4px);
+}
+
+.vc-peer-btn:hover {
+  background: rgba(0, 0, 0, 0.75);
+  transform: scale(1.1);
+}
+
+.vc-peer-btn.vc-peer-btn-active {
+  background: rgba(224, 82, 82, 0.7);
+}
+
+/* ── Volume popup ──────────────────────────────────────────────────────── */
+.vc-vol-popup {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 10px 14px;
+  min-width: 220px;
+  z-index: 20;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+
+.vc-vol-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.vc-vol-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px;
+  line-height: 1;
+}
+
+.vc-vol-close:hover {
+  color: var(--text-primary);
+}
+
+.vc-vol-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vc-vol-mute-btn {
+  background: none;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.vc-vol-mute-btn.vc-vol-muted {
+  opacity: 0.6;
+}
+
+.vc-vol-slider {
+  flex: 1;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--border-strong);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.vc-vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg-elevated);
+  box-shadow: 0 0 4px rgba(0,0,0,0.3);
+}
+
+.vc-vol-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg-elevated);
+  box-shadow: 0 0 4px rgba(0,0,0,0.3);
+}
+
+.vc-vol-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Screen share tile ─────────────────────────────────────────────────── */
+.vc-screen-tile {
+  border-color: rgba(88, 101, 242, 0.5);
+}
+
+.vc-screen-tile .vc-video-wrap video {
+  object-fit: contain;
+  background: #000;
+}
+
+.vc-screen-tile .vc-name {
+  color: #7289da;
+}
+
+/* ── Auto-focus button active state ────────────────────────────────────── */
+.vp-hdr-btn.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* ── Screen share sidebar button ───────────────────────────────────────── */
+#vsb-screen.active {
+  background: rgba(88, 101, 242, 0.18);
+  color: #7289da;
+  box-shadow: 0 0 0 1.5px #5865F2;
+}
+
+/* ── Responsive fixes for focus mode ───────────────────────────────────── */
+@media (max-width: 768px) {
+  #voice-grid.vc-focus-mode .vc-unfocused {
+    width: 120px;
+    height: 90px;
+  }
+
+  #voice-grid.vc-focus-mode .vc-focused {
+    max-height: 50vh;
+  }
+
+  .vc-vol-popup {
+    min-width: 180px;
+    padding: 8px 10px;
+  }
+}
