@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chirm — Sign In</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <style>
+    html, body { height: 100%; overflow: auto; }
+    .auth-page { min-height: 100svh; transition: background 0.3s; }
+    .auth-page.has-bg-image { background-size: cover; background-position: center; background-repeat: no-repeat; position: relative; }
+    .auth-page.has-bg-image::before { content: ''; position: absolute; inset: 0; background: rgba(0,0,0,var(--bg-overlay-opacity, 0)); pointer-events: none; }
+    .auth-page.has-bg-image > * { position: relative; }
+    .server-icon-img { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; margin: 0 auto 8px; display: block; border: 2px solid var(--border); }
+    .server-icon-placeholder { width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 8px; display: flex; align-items: center; justify-content: center; font-size: 42px; }
+
+    /* Avatar step */
+    #avatar-step { display: none; }
+    .avatar-preview-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 20px 0; }
+    .avatar-preview { width: 96px; height: 96px; border-radius: 50%; background: var(--bg-elevated); border: 3px solid var(--accent); display: flex; align-items: center; justify-content: center; font-size: 36px; font-weight: 700; color: var(--text-secondary); overflow: hidden; }
+    .avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
+
+    /* Agreement modal */
+    .agreement-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .agreement-box { background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); padding: 32px; width: 100%; max-width: 520px; max-height: 80vh; display: flex; flex-direction: column; box-shadow: var(--shadow); }
+    .agreement-body { overflow-y: auto; flex: 1; margin: 16px 0; padding-right: 4px; font-size: 14px; line-height: 1.65; color: var(--text-secondary); }
+    .agreement-body h1,.agreement-body h2,.agreement-body h3 { color: var(--text-primary); margin: 12px 0 6px; }
+    .agreement-body p { margin: 6px 0; }
+    .agreement-body ul,.agreement-body ol { margin: 6px 0 6px 20px; }
+    .agreement-check { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid var(--border); cursor: pointer; }
+    .auth-logo p { word-break: break-word; overflow-wrap: break-word; }
+    .agreement-check label { font-size: 14px; cursor: pointer; user-select: none; }
+  </style>
+</head>
+<body>
+<div class="auth-page" id="auth-page">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div id="server-icon-wrap">
+        <div class="server-icon-placeholder">✦</div>
+      </div>
+      <h1 id="server-title">Chirm</h1>
+      <p id="server-subtitle">Your community, self-hosted.</p>
+    </div>
+
+    <div class="auth-tabs" id="auth-tabs">
+      <button class="auth-tab active" id="tab-login" onclick="showTab('login')">Sign In</button>
+      <button class="auth-tab" id="tab-register" onclick="showTab('register')">Register</button>
+    </div>
+
+    <div id="error-msg" class="auth-error" style="display:none"></div>
+
+    <!-- LOGIN FORM -->
+    <div id="form-login">
+      <div class="form-group">
+        <label>Username or Email</label>
+        <input type="text" id="login-id" placeholder="username or email" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="login-pass" placeholder="&#xB7;&#xB7;&#xB7;&#xB7;&#xB7;&#xB7;&#xB7;&#xB7;" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary w-full" onclick="doLogin()">Sign In</button>
+    </div>
+
+    <!-- REGISTER FORM -->
+    <div id="form-register" style="display:none">
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" id="reg-username" placeholder="Choose a username" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="reg-email" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="reg-pass" placeholder="Minimum 8 characters" autocomplete="new-password">
+      </div>
+      <div class="form-group" id="invite-group" style="display:none">
+        <label>Invite Code <span style="color:var(--danger)">*</span></label>
+        <input type="text" id="reg-invite" placeholder="Enter invite code">
+      </div>
+      <button class="btn btn-primary w-full" onclick="doRegister()">Create Account</button>
+    </div>
+
+    <!-- AVATAR STEP — shown after successful registration -->
+    <div id="avatar-step">
+      <div style="text-align:center;margin-bottom:16px">
+        <h2 style="font-size:20px;margin-bottom:6px">Set your avatar</h2>
+        <p style="font-size:14px;color:var(--text-muted)">Add a profile picture — you can always change it later in Settings.</p>
+      </div>
+      <div class="avatar-preview-wrap">
+        <div class="avatar-preview" id="avatar-preview-el">
+          <span id="avatar-initial">?</span>
+        </div>
+        <input type="file" id="avatar-file-input" accept="image/*" style="display:none" onchange="previewAvatar(this)">
+        <button class="btn btn-secondary" onclick="document.getElementById('avatar-file-input').click()">Choose Photo</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-ghost" style="flex:1" onclick="skipAvatar()">Skip for now</button>
+        <button class="btn btn-primary" style="flex:1" id="save-avatar-btn" disabled onclick="saveAvatar()">Save &amp; Continue</button>
+      </div>
+    </div>
+
+    <div class="auth-footer" id="auth-footer">
+      Self-hosted with <a href="https://www.chirm.org" target="_blank">Chirm</a>
+      <span id="cert-footer-link" style="display:none">
+        &nbsp;·&nbsp;
+        <a href="/ca-cert" style="color:var(--text-muted);font-size:12px" title="Install the server certificate to enable push notifications &amp; PWA install">🔒 Install Cert</a>
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- AGREEMENT MODAL (Fix 5) -->
+<div class="agreement-overlay" id="agreement-overlay" style="display:none">
+  <div class="agreement-box">
+    <h2 style="font-size:18px;margin:0 0 2px">Community Agreement</h2>
+    <p style="font-size:13px;color:var(--text-muted);margin:0">Please read and accept before joining.</p>
+    <div class="agreement-body" id="agreement-body"></div>
+    <div class="agreement-check">
+      <input type="checkbox" id="agreement-check" onchange="document.getElementById('agreement-confirm-btn').disabled = !this.checked">
+      <label for="agreement-check">I have read and agree to the above.</label>
+    </div>
+    <button class="btn btn-primary w-full" id="agreement-confirm-btn" disabled onclick="confirmAgreement()">Continue &rarr;</button>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+  // Lightweight markdown renderer for agreement text
+  function renderMarkdown(md) {
+    if (!md) return '';
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    let lines = md.split('\n');
+    let html = '', inUl = false, inOl = false;
+    const closeList = () => { if(inUl){html+='</ul>';inUl=false;} if(inOl){html+='</ol>';inOl=false;} };
+    const inline = s => esc(s)
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g,'<em>$1</em>')
+      .replace(/`([^`]+)`/g,'<code>$1</code>');
+    for (let line of lines) {
+      const h3=line.match(/^### (.+)/); if(h3){closeList();html+=`<h3>${inline(h3[1])}</h3>`;continue;}
+      const h2=line.match(/^## (.+)/);  if(h2){closeList();html+=`<h2>${inline(h2[1])}</h2>`;continue;}
+      const h1=line.match(/^# (.+)/);   if(h1){closeList();html+=`<h1>${inline(h1[1])}</h1>`;continue;}
+      const ul=line.match(/^[-*] (.+)/);if(ul){if(!inUl){html+='<ul>';inUl=true;}html+=`<li>${inline(ul[1])}</li>`;continue;}else if(inUl){html+='</ul>';inUl=false;}
+      const ol=line.match(/^\d+\. (.+)/);if(ol){if(!inOl){html+='<ol>';inOl=true;}html+=`<li>${inline(ol[1])}</li>`;continue;}else if(inOl){html+='</ol>';inOl=false;}
+      if(line.trim()===''){html+='<br>';}else{html+=`<p>${inline(line)}</p>`;}
+    }
+    closeList();
+    return html;
+  }
+
+  const params = new URLSearchParams(location.search);
+  const inviteCode = params.get('invite');
+  let _settings = {};
+  let _agreementAccepted = false;
+  let _agreementCallback = null;
+  let _avatarBlob = null;
+
+  async function init() {
+    // Redirect if already logged in
+    const me = await fetch('/api/me', { credentials: 'include' }).then(r => r.json()).catch(() => null);
+    if (me?.id) { window.location.href = '/'; return; }
+
+    // Load public settings (Fix 1/3A/3B/3C/4 — public endpoint, no auth required)
+    const settings = await fetch('/api/public-settings').then(r => r.json()).catch(() => ({}));
+    _settings = settings;
+
+    // Fix 3B: Server name
+    if (settings.server_name) {
+      document.getElementById('server-title').textContent = settings.server_name;
+      document.title = `${settings.server_name} — Sign In`;
+    }
+
+    // Fix 3C: Server description
+    if (settings.server_description) {
+      document.getElementById('server-subtitle').textContent = settings.server_description;
+    }
+
+    // Fix 3A: Server icon — use server_icon if set, else Jenn logo as default
+    const iconSrc = settings.server_icon || '/assets/jenn-circle.png';
+    document.getElementById('server-icon-wrap').innerHTML =
+      `<img src="${iconSrc}" class="server-icon-img" onerror="this.outerHTML='<div class=\\'server-icon-placeholder\\'style=\\'margin:0 auto 8px;display:flex;align-items:center;justify-content:center;font-size:42px\\'>✦</div>'">`;
+
+    // Fix 4: Login page background customization
+    const authPage = document.getElementById('auth-page');
+    if (settings.login_bg_image) {
+      authPage.style.backgroundImage = `url('${settings.login_bg_image.replace(/'/g, "\\'")}')`;
+      authPage.classList.add('has-bg-image');
+      // Apply overlay opacity if set (0-100), default none
+      const overlayOpacity = parseFloat(settings.login_bg_overlay || '0');
+      if (overlayOpacity > 0) {
+        authPage.style.setProperty('--bg-overlay-opacity', overlayOpacity / 100);
+      }
+    } else if (settings.login_bg_color) {
+      authPage.style.background = settings.login_bg_color;
+    }
+
+    // Fix 1: Require invite group
+    if (settings.require_invite === '1') {
+      document.getElementById('invite-group').style.display = 'block';
+    }
+
+    if (inviteCode) {
+      document.getElementById('reg-invite').value = inviteCode;
+      showTab('register');
+    }
+
+    // Show the cert footer link only if the server has a CA cert to offer.
+    fetch('/ca-cert', { method: 'HEAD' }).then(r => {
+      if (r.ok) document.getElementById('cert-footer-link').style.display = 'inline';
+    }).catch(() => {});
+  }
+
+  function showTab(tab) {
+    document.getElementById('form-login').style.display = tab === 'login' ? 'block' : 'none';
+    document.getElementById('form-register').style.display = tab === 'register' ? 'block' : 'none';
+    document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+    document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+    clearError();
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('error-msg');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+  function clearError() { document.getElementById('error-msg').style.display = 'none'; }
+
+  function toast(msg, type = 'info') {
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.textContent = msg;
+    document.getElementById('toast-container').appendChild(el);
+    setTimeout(() => el.remove(), 3500);
+  }
+
+  async function doLogin() {
+    clearError();
+    const login = document.getElementById('login-id').value.trim();
+    const password = document.getElementById('login-pass').value;
+    if (!login || !password) { showError('Please fill in all fields.'); return; }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showError(data.error || 'Login failed'); return; }
+      window.location.href = '/';
+    } catch (e) { showError('Network error. Is the server running?'); }
+  }
+
+  // Fix 5: Agreement popup
+  function showAgreement(onConfirm) {
+    document.getElementById('agreement-body').innerHTML = renderMarkdown(_settings.agreement_text || '');
+    document.getElementById('agreement-check').checked = false;
+    document.getElementById('agreement-confirm-btn').disabled = true;
+    document.getElementById('agreement-overlay').style.display = 'flex';
+    _agreementCallback = onConfirm;
+  }
+  function confirmAgreement() {
+    document.getElementById('agreement-overlay').style.display = 'none';
+    _agreementAccepted = true;
+    if (_agreementCallback) _agreementCallback();
+  }
+
+  async function doRegister() {
+    clearError();
+    const username = document.getElementById('reg-username').value.trim();
+    const email = document.getElementById('reg-email').value.trim();
+    const password = document.getElementById('reg-pass').value;
+    const invite_code = document.getElementById('reg-invite').value.trim();
+
+    if (!username || !email || !password) { showError('Please fill in all fields.'); return; }
+    if (password.length < 8) { showError('Password must be at least 8 characters.'); return; }
+
+    // Fix 5: Show agreement if enabled and not yet accepted this session
+    if (_settings.agreement_enabled === '1' && !_agreementAccepted) {
+      showAgreement(() => doRegister());
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, email, password, invite_code }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showError(data.error || 'Registration failed'); _agreementAccepted = false; return; }
+
+      // Show avatar upload step
+      showAvatarStep(username);
+    } catch (e) { showError('Network error. Is the server running?'); }
+  }
+
+  // ── Avatar step ───────────────────────────────────────────────────────────
+  function showAvatarStep(username) {
+    document.getElementById('form-register').style.display = 'none';
+    document.getElementById('error-msg').style.display = 'none';
+    document.getElementById('auth-tabs').style.display = 'none';
+    document.getElementById('auth-footer').style.display = 'none';
+    const initial = username ? username[0].toUpperCase() : '?';
+    document.getElementById('avatar-initial').textContent = initial;
+    document.getElementById('avatar-step').style.display = 'block';
+  }
+
+  function previewAvatar(input) {
+    const file = input.files[0];
+    if (!file) return;
+    _avatarBlob = file;
+    const reader = new FileReader();
+    reader.onload = e => {
+      document.getElementById('avatar-preview-el').innerHTML = `<img src="${e.target.result}" alt="preview">`;
+    };
+    reader.readAsDataURL(file);
+    document.getElementById('save-avatar-btn').disabled = false;
+  }
+
+  async function saveAvatar() {
+    if (!_avatarBlob) return skipAvatar();
+    const form = new FormData();
+    form.append('avatar', _avatarBlob);
+    try {
+      await fetch('/api/me/avatar', { method: 'POST', credentials: 'include', body: form });
+    } catch (e) { /* non-critical, continue anyway */ }
+    window.location.href = '/';
+  }
+
+  function skipAvatar() { window.location.href = '/'; }
+
+  // Enter key support
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    if (document.getElementById('avatar-step').style.display !== 'none') return;
+    if (document.getElementById('agreement-overlay').style.display !== 'none') return;
+    const loginForm = document.getElementById('form-login');
+    if (loginForm.style.display !== 'none') doLogin();
+    else if (document.getElementById('form-register').style.display !== 'none') doRegister();
+  });
+
+  init();
+</script>
+
+</body>
+</html>

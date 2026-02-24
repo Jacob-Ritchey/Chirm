@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chirm — Setup</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <style>
+    html, body { height: 100%; overflow: auto; }
+    .auth-page { min-height: 100svh; }
+    .setup-card { max-width: 500px; }
+    .step-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+    .icon-upload-area { display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--bg-elevated); border: 1px dashed var(--border-strong); border-radius: var(--radius); cursor: pointer; transition: border-color 0.15s; }
+    .icon-upload-area:hover { border-color: var(--accent); }
+    .icon-preview { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--bg-void); border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 28px; overflow: hidden; flex-shrink: 0; }
+    .icon-preview img { width: 100%; height: 100%; object-fit: cover; }
+    .color-row { display: flex; gap: 8px; align-items: center; }
+    .color-row input[type=color] { width: 40px; height: 36px; padding: 2px; border-radius: var(--radius); border: 1px solid var(--border); background: none; cursor: pointer; }
+    .agreement-textarea { min-height: 120px; font-family: monospace; font-size: 13px; resize: vertical; }
+  </style>
+</head>
+<body>
+<div class="auth-page">
+  <div class="auth-card setup-card">
+
+    <!-- Step 1: Welcome -->
+    <div id="step-1" class="setup-step">
+      <div class="auth-logo">
+        <img src="/assets/jenn-circle.png" style="width:64px;height:64px;border-radius:50%;margin:0 auto 8px;display:block;border:2px solid var(--border)">
+        <h1>Welcome to Chirm</h1>
+        <p>Self-hosted community chat. Let's get you set up.</p>
+      </div>
+      <div style="margin-bottom:24px">
+        <div style="display:flex;flex-direction:column;gap:10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+          <div class="flex-center gap-8"><span>💬</span><span style="font-size:14px">Real-time messaging with WebSockets</span></div>
+          <div class="flex-center gap-8"><span>🔐</span><span style="font-size:14px">Roles, permissions &amp; invite system</span></div>
+          <div class="flex-center gap-8"><span>📁</span><span style="font-size:14px">File and image uploads</span></div>
+          <div class="flex-center gap-8"><span>🗄️</span><span style="font-size:14px">SQLite — zero-setup, single file DB</span></div>
+        </div>
+      </div>
+      <button class="btn btn-primary w-full" onclick="goStep(2)">Begin Setup →</button>
+    </div>
+
+    <!-- Step 2: Server Identity -->
+    <div id="step-2" class="setup-step" style="display:none">
+      <div class="setup-progress">
+        <div class="step-dot done"></div>
+        <div class="step-dot active"></div>
+        <div class="step-dot"></div>
+        <div class="step-dot"></div>
+      </div>
+      <div class="step-label">Step 1 of 3</div>
+      <h2 style="margin-bottom:4px;font-size:22px">Identity &amp; Branding</h2>
+      <p style="font-size:14px;color:var(--text-muted);margin-bottom:20px">Name your community and give it a look.</p>
+
+      <div class="form-group">
+        <label>Server Name <span style="color:var(--danger)">*</span></label>
+        <input type="text" id="server-name" placeholder="My Community" maxlength="64">
+      </div>
+
+      <div class="form-group">
+        <label>Description <span style="color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <input type="text" id="server-desc" placeholder="A place for our community" maxlength="128">
+      </div>
+
+      <div class="form-group">
+        <label>Server Icon <span style="color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0">(optional — defaults to Chirm logo)</span></label>
+        <div class="icon-upload-area" onclick="document.getElementById('icon-file-input').click()">
+          <div class="icon-preview" id="icon-preview-el">
+            <img src="/assets/jenn-circle.png" id="icon-preview-img" alt="">
+          </div>
+          <div>
+            <div style="font-size:14px;font-weight:500">Upload server icon</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:2px">PNG, JPG, GIF or WebP — max 5MB</div>
+          </div>
+        </div>
+        <input type="file" id="icon-file-input" accept="image/*" style="display:none" onchange="previewSetupIcon(this)">
+      </div>
+
+      <div class="form-group">
+        <label>Login Page Background Color <span style="color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <div class="color-row">
+          <input type="color" id="bg-color-picker" value="#0d0d12" oninput="document.getElementById('bg-color-text').value=this.value">
+          <input type="text" id="bg-color-text" placeholder="#0d0d12 or CSS color" style="flex:1" oninput="syncColorPicker(this.value)">
+        </div>
+      </div>
+
+      <div id="error-2" class="auth-error" style="display:none"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" onclick="goStep(1)">← Back</button>
+        <button class="btn btn-primary" style="flex:1" onclick="goStep(3)">Continue →</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Community Agreement (optional) -->
+    <div id="step-3" class="setup-step" style="display:none">
+      <div class="setup-progress">
+        <div class="step-dot done"></div>
+        <div class="step-dot done"></div>
+        <div class="step-dot active"></div>
+        <div class="step-dot"></div>
+      </div>
+      <div class="step-label">Step 2 of 3</div>
+      <h2 style="margin-bottom:4px;font-size:22px">Join Agreement</h2>
+      <p style="font-size:14px;color:var(--text-muted);margin-bottom:20px">Optionally require new members to accept community rules before registering.</p>
+
+      <div class="form-group">
+        <label>Enable Agreement Popup</label>
+        <select id="agreement-enabled" onchange="toggleAgreementText()">
+          <option value="0">Disabled</option>
+          <option value="1">Enabled — show before registration</option>
+        </select>
+      </div>
+
+      <div id="agreement-text-group" style="display:none">
+        <div class="form-group">
+          <label>Agreement Text <span style="color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0">(Markdown supported)</span></label>
+          <textarea class="agreement-textarea" id="agreement-text" placeholder="## Community Rules&#10;&#10;By joining, you agree to:&#10;&#10;1. Be respectful to all members&#10;2. No spam or self-promotion&#10;3. Follow the server guidelines"></textarea>
+        </div>
+        <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--text-muted)">
+          ℹ️ Members will see this text with a checkbox before creating their account. You can edit it anytime in the admin panel.
+        </div>
+      </div>
+
+      <div id="error-3" class="auth-error" style="display:none"></div>
+      <div style="display:flex;gap:8px;margin-top:20px">
+        <button class="btn btn-ghost" onclick="goStep(2)">← Back</button>
+        <button class="btn btn-primary" style="flex:1" onclick="goStep(4)">Continue →</button>
+      </div>
+    </div>
+
+    <!-- Step 4: Admin Account -->
+    <div id="step-4" class="setup-step" style="display:none">
+      <div class="setup-progress">
+        <div class="step-dot done"></div>
+        <div class="step-dot done"></div>
+        <div class="step-dot done"></div>
+        <div class="step-dot active"></div>
+      </div>
+      <div class="step-label">Step 3 of 3</div>
+      <h2 style="margin-bottom:8px;font-size:22px">Create your admin account</h2>
+      <p style="font-size:14px;color:var(--text-muted);margin-bottom:20px">This account will be the server owner with full permissions.</p>
+
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" id="admin-username" placeholder="admin" maxlength="32" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="admin-email" placeholder="admin@example.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="admin-pass" placeholder="Minimum 8 characters" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label>Confirm Password</label>
+        <input type="password" id="admin-pass2" placeholder="Repeat password" autocomplete="new-password">
+      </div>
+
+      <div id="error-4" class="auth-error" style="display:none"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" onclick="goStep(3)">← Back</button>
+        <button class="btn btn-primary" style="flex:1" id="setup-btn" onclick="doSetup()">Launch ✦</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+  async function checkSetup() {
+    const status = await fetch('/api/setup/status').then(r => r.json()).catch(() => null);
+    if (status?.setup_done) window.location.href = '/';
+  }
+
+  function syncColorPicker(val) {
+    try { document.getElementById('bg-color-picker').value = val; } catch(e){}
+  }
+
+  let _setupIconFile = null;
+
+  function previewSetupIcon(input) {
+    const file = input.files[0];
+    if (!file) return;
+    _setupIconFile = file;
+    const reader = new FileReader();
+    reader.onload = e => {
+      document.getElementById('icon-preview-el').innerHTML = `<img src="${e.target.result}" style="width:100%;height:100%;object-fit:cover">`;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function toggleAgreementText() {
+    const enabled = document.getElementById('agreement-enabled').value === '1';
+    document.getElementById('agreement-text-group').style.display = enabled ? 'block' : 'none';
+  }
+
+  function clearError(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
+
+  function showError(id, msg) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  function goStep(n) {
+    clearError('error-2'); clearError('error-3'); clearError('error-4');
+
+    if (n === 3) {
+      const name = document.getElementById('server-name').value.trim();
+      if (!name) { showError('error-2', 'Server name is required.'); return; }
+    }
+
+    document.querySelectorAll('.setup-step').forEach(el => el.style.display = 'none');
+    document.getElementById(`step-${n}`).style.display = 'block';
+  }
+
+  async function doSetup() {
+    clearError('error-4');
+    const username = document.getElementById('admin-username').value.trim();
+    const email = document.getElementById('admin-email').value.trim();
+    const password = document.getElementById('admin-pass').value;
+    const password2 = document.getElementById('admin-pass2').value;
+    const server_name = document.getElementById('server-name').value.trim();
+    const server_description = document.getElementById('server-desc').value.trim();
+    const login_bg_color = document.getElementById('bg-color-text').value.trim();
+    const agreement_enabled = document.getElementById('agreement-enabled').value;
+    const agreement_text = document.getElementById('agreement-text').value.trim();
+
+    if (!username || !email || !password) { showError('error-4', 'All fields are required.'); return; }
+    if (password.length < 8) { showError('error-4', 'Password must be at least 8 characters.'); return; }
+    if (password !== password2) { showError('error-4', 'Passwords do not match.'); return; }
+    if (agreement_enabled === '1' && !agreement_text) { showError('error-4', 'Please add agreement text, or disable the agreement.'); return; }
+
+    const btn = document.getElementById('setup-btn');
+    btn.textContent = 'Setting up…'; btn.disabled = true;
+
+    try {
+      const res = await fetch('/api/setup', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          server_name, server_description, login_bg_color,
+          agreement_enabled, agreement_text,
+          username, email, password,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showError('error-4', data.error || 'Setup failed');
+        btn.textContent = 'Launch ✦'; btn.disabled = false;
+        return;
+      }
+
+      // Upload server icon if one was selected
+      if (_setupIconFile) {
+        const form = new FormData();
+        form.append('icon', _setupIconFile);
+        await fetch('/api/settings/icon', { method: 'POST', credentials: 'include', body: form }).catch(() => {});
+      }
+
+      window.location.href = '/';
+    } catch (e) {
+      showError('error-4', 'Network error. Is the server running?');
+      btn.textContent = 'Launch ✦'; btn.disabled = false;
+    }
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && document.getElementById('step-4').style.display !== 'none') {
+      doSetup();
+    }
+  });
+
+  checkSetup();
+</script>
+</body>
+</html>
