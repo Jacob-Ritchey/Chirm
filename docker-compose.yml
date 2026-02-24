@@ -1,0 +1,42 @@
+# ─── Chirm — Docker Compose ──────────────────────────────────────────────────
+# Usage:
+#   docker compose up -d          # Start Chirm
+#   docker compose logs -f        # Watch logs
+#   docker compose down            # Stop
+#   docker compose down -v         # Stop and wipe all data
+#
+# First run: open https://localhost:8443 → follow setup wizard
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  chirm:
+    build: .
+    container_name: chirm
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"     # HTTP  (also serves /ca-cert)
+      - "8443:8443"     # HTTPS (self-signed CA or your own cert)
+
+    environment:
+      # To set your own secret instead of auto-generating, uncomment:
+      # JWT_SECRET: "paste-output-of-openssl-rand-hex-32-here"
+
+      DATA_DIR: /app/data
+      PORT: "8080"
+      HTTPS_PORT: "8443"
+
+      # If behind a reverse proxy on a different domain, set this:
+      # ALLOWED_ORIGIN: "https://chat.yourdomain.com"
+
+      # To use your own TLS certs (Let's Encrypt, Tailscale, etc.):
+      # CHIRM_TLS_CERT: /app/certs/cert.pem
+      # CHIRM_TLS_KEY: /app/certs/key.pem
+
+    volumes:
+      - chirm-data:/app/data       # SQLite DB + uploads
+      - chirm-certs:/app/certs     # TLS certificates (auto-generated or custom)
+
+volumes:
+  chirm-data:
+  chirm-certs:
