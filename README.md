@@ -8,7 +8,7 @@ alt="Jenn The Wren">
 </img>
 
 # Chirm
-![Chirm.org](https://chirm.org/index.html) 
+[Chirm.org](https://chirm.org)
 
 **Self-hosted community chat.** Real-Time Messaging with voice, video, and screen sharing for your Raspberry Pi, VPS, or home server. Single binary, SQLite database, zero external dependencies.
 
