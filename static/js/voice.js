@@ -202,9 +202,15 @@ const Voice = (() => {
     }
 
     if (scrBtn) {
-      scrBtn.classList.toggle('active', screenSharing);
-      scrBtn.querySelector('span').textContent = '🖥';
-      scrBtn.title = screenSharing ? 'Stop Sharing' : 'Share Screen';
+      // Hide entirely if getDisplayMedia is not supported (mobile, older browsers)
+      if (!navigator.mediaDevices?.getDisplayMedia) {
+        scrBtn.style.display = 'none';
+      } else {
+        scrBtn.style.display = '';
+        scrBtn.classList.toggle('active', screenSharing);
+        scrBtn.querySelector('span').textContent = '🖥';
+        scrBtn.title = screenSharing ? 'Stop Sharing' : 'Share Screen';
+      }
     }
   }
 
@@ -347,6 +353,10 @@ const Voice = (() => {
 
   async function startScreenShare() {
     if (!currentChannelId || screenSharing) return;
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      toast('Screen sharing is not supported on this device or browser.', 'error');
+      return;
+    }
     try {
       screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: { cursor: 'always' },
@@ -372,6 +382,13 @@ const Voice = (() => {
     upsertScreenTile('local', App.user, screenStream);
     sendMediaState();
     updateVoiceStatusBar();
+
+    // Force renegotiation with non-initiator peers — onnegotiationneeded only fires
+    // for initiator PCs, so non-initiator peers would never receive the
+    // new screen share tracks without an explicit offer.
+    for (const uid of Object.keys(peers)) {
+      if (!peers[uid].initiator) triggerRenegotiation(uid);
+    }
   }
 
   function stopScreenShare() {
@@ -379,32 +396,44 @@ const Voice = (() => {
     screenSharing = false;
 
     if (screenStream) {
-      screenStream.getTracks().forEach(t => t.stop());
-      // Remove from peer connections
+      // Collect track IDs before stopping so we can match senders
+      const screenTrackIds = new Set(screenStream.getTracks().map(t => t.id));
+
+      // Remove senders from peer connections BEFORE stopping tracks
       for (const uid of Object.keys(peers)) {
         const pc = peers[uid].pc;
         for (const sender of pc.getSenders()) {
-          if (sender.track && screenStream.getTracks().some(t => t.id === sender.track.id)) {
+          if (sender.track && screenTrackIds.has(sender.track.id)) {
             try { pc.removeTrack(sender); } catch {}
           }
         }
       }
+
+      // Now stop the tracks
+      screenStream.getTracks().forEach(t => t.stop());
       screenStream = null;
     }
 
-    document.getElementById('voice-tile-screen-local')?.remove();
+    // Use removeScreenTile for proper focus cleanup
+    removeScreenTile('local');
     sendMediaState();
     updateVoiceStatusBar();
 
-    // Renegotiate with peers we're the initiator for
+    // Renegotiate with non-initiator peers so they receive the updated
+    // track list. Initiators will auto-fire onnegotiationneeded.
     for (const uid of Object.keys(peers)) {
-      if (peers[uid].initiator) triggerRenegotiation(uid);
+      if (!peers[uid].initiator) triggerRenegotiation(uid);
     }
   }
 
   function triggerRenegotiation(uid) {
     const pc = peers[uid]?.pc;
     if (!pc) return;
+    // Avoid glare: only send offer if signaling state is stable
+    if (pc.signalingState !== 'stable') {
+      console.log(`[voice] Skipping renegotiation with ${uid} — state is ${pc.signalingState}`);
+      return;
+    }
     pc.createOffer().then(o => {
       const sdp = preferOpusHighQuality(o.sdp);
       return pc.setLocalDescription({ type: o.type, sdp });
@@ -530,31 +559,42 @@ const Voice = (() => {
     };
 
     // Track incoming media — distinguish camera from screen share
-    // by checking whether we already have the main stream wired
+    // We store the original stream ID on elements so we can reliably
+    // detect when a second, different stream arrives.
     pc.ontrack = (e) => {
+      const incomingStreamId = e.streams[0]?.id || null;
+
       if (e.track.kind === 'audio') {
         const existingTile = document.getElementById(`voice-tile-${uid}`);
         const existingAud = existingTile?.querySelector('audio');
-        const curStreamId = existingAud?.srcObject?.id;
+        const origStreamId = existingAud?.dataset?.origStreamId;
 
-        if (curStreamId && e.streams[0] && e.streams[0].id !== curStreamId) {
+        if (origStreamId && incomingStreamId && incomingStreamId !== origStreamId) {
           // Second audio stream → screen share audio
           upsertScreenAudio(uid, e.track);
         } else {
           upsertPeerAudio(uid, e.track);
+          // Tag the audio element with the original stream ID
+          const tile = document.getElementById(`voice-tile-${uid}`);
+          const aud = tile?.querySelector('audio');
+          if (aud && incomingStreamId) aud.dataset.origStreamId = incomingStreamId;
           setupAudioAnalyser(uid, e.track);
         }
       } else {
         const existingTile = document.getElementById(`voice-tile-${uid}`);
         const existingVid = existingTile?.querySelector('video');
-        const curStreamId = existingVid?.srcObject?.id;
+        const origStreamId = existingVid?.dataset?.origStreamId;
 
-        if (curStreamId && e.streams[0] && e.streams[0].id !== curStreamId) {
+        if (origStreamId && incomingStreamId && incomingStreamId !== origStreamId) {
           // Second video stream → screen share
           screenStateByPeer[uid] = true;
           upsertScreenTile(uid, null, e.streams[0]);
         } else {
           upsertPeerTile(uid, e.streams[0]);
+          // Tag the video element with the original stream ID
+          const tile = document.getElementById(`voice-tile-${uid}`);
+          const vid = tile?.querySelector('video');
+          if (vid && incomingStreamId) vid.dataset.origStreamId = incomingStreamId;
         }
       }
     };
@@ -599,6 +639,16 @@ const Voice = (() => {
     peers[uid].pc.close();
     delete peers[uid];
     destroyAudioAnalyser(uid);
+
+    // Clear stream ID tags on the tile so reconnection doesn't
+    // mistake the new camera stream for a screen share
+    const tile = document.getElementById(`voice-tile-${uid}`);
+    if (tile) {
+      const vid = tile.querySelector('video');
+      const aud = tile.querySelector('audio');
+      if (vid) delete vid.dataset.origStreamId;
+      if (aud) delete aud.dataset.origStreamId;
+    }
   }
 
   // ── Speaking Detection ──────────────────────────────────────────────────

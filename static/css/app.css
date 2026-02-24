@@ -1617,9 +1617,9 @@ pre code { background: none; border: none; padding: 0; }
   display: none;
 }
 
-/* ── 4. Voice-panel header row (shown in split / collapsed state) ─────── */
+/* ── 4. Voice-panel header row ─────────────────────────────────────────── */
 #voice-panel-header {
-  display: none;           /* hidden in full-panel mode */
+  display: flex;              /* always visible when voice panel is active */
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
@@ -1629,7 +1629,17 @@ pre code { background: none; border: none; padding: 0; }
   flex-shrink: 0;
 }
 
-#main.split-voice #voice-panel-header { display: flex; }
+/* In full voice view (not split), hide collapse/expand buttons */
+#voice-panel-header .vp-fullscreen-btn,
+#voice-panel-header #vp-collapse-btn {
+  display: none;
+}
+
+/* Show collapse/expand only in split view */
+#main.split-voice #voice-panel-header .vp-fullscreen-btn,
+#main.split-voice #voice-panel-header #vp-collapse-btn {
+  display: inline-flex;
+}
 
 .vp-channel-name {
   font-size: 12.5px;
@@ -2329,6 +2339,11 @@ pre code { background: none; border: none; padding: 0; }
   background: rgba(88, 101, 242, 0.18);
   color: #7289da;
   box-shadow: 0 0 0 1.5px #5865F2;
+}
+
+/* Hide screen share button on mobile — getDisplayMedia is unavailable */
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
+  #vsb-screen { display: none !important; }
 }
 
 /* ── Responsive fixes for focus mode ───────────────────────────────────── */
