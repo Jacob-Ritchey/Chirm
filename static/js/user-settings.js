@@ -8,7 +8,7 @@
 
 import App from './state.js';
 import api from './api.js';
-import { toast, esc, stringToColor } from './utils.js';
+import { toast, esc, escAttr, escInline, stringToColor } from './utils.js';
 import ChirmCache from './cache.js';
 import ChirmNotifs from './notifications.js';
 import ChirmTheme from './theme.js';
@@ -101,26 +101,86 @@ const ChirmSettings = (() => {
     modal.querySelectorAll('.us-pane').forEach(p => p.classList.toggle('active', p.id === `us-pane-${tab}`));
   }
 
+  // ── Profile tab state ────────────────────────────────────────────────────────
+
+  let _profileLinks = [];
+
+  function _buildLinksEditor() {
+    if (!_profileLinks.length) {
+      return `<div id="profile-links-list" style="margin-bottom:8px"></div>`;
+    }
+    const rows = _profileLinks.map((l, i) => `
+      <div class="profile-link-row" style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+        <input type="text" placeholder="Label" value="${escAttr(l.label || '')}"
+          oninput="ChirmSettings._updateLink(${i},'label',this.value)"
+          style="flex:1;min-width:0">
+        <input type="text" placeholder="URL" value="${escAttr(l.url || '')}"
+          oninput="ChirmSettings._updateLink(${i},'url',this.value)"
+          style="flex:2;min-width:0">
+        <button class="btn btn-sm btn-ghost" onclick="ChirmSettings.removeProfileLink(${i})" title="Remove">✕</button>
+      </div>
+    `).join('');
+    return `<div id="profile-links-list" style="margin-bottom:8px">${rows}</div>`;
+  }
+
   // ── Profile tab HTML ────────────────────────────────────────────────────────
 
   function _buildProfileTab() {
+    // Init links from App.user
+    try { _profileLinks = JSON.parse(App.user.links || '[]'); } catch { _profileLinks = []; }
+
+    const bannerStyle = App.user.banner
+      ? `background:url('${esc(App.user.banner)}') center/cover;aspect-ratio:16/9;border-radius:var(--radius) var(--radius) 0 0;position:relative`
+      : `background:linear-gradient(135deg,var(--accent),var(--bg-surface));aspect-ratio:16/9;border-radius:var(--radius) var(--radius) 0 0;position:relative`;
     const avatarHtml = App.user.avatar
-      ? `<img src="${esc(App.user.avatar)}" style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:2px solid var(--border-strong)">`
-      : `<div class="avatar avatar-lg" style="background:${stringToColor(App.user.username)}">${App.user.username[0].toUpperCase()}</div>`;
+      ? `<img src="${esc(App.user.avatar)}" style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:3px solid var(--bg-surface)">`
+      : `<div class="avatar avatar-lg" style="background:${stringToColor(App.user.username)};border:3px solid var(--bg-surface)">${App.user.username[0].toUpperCase()}</div>`;
+    const bio = App.user.bio || '';
     return `
-      <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;padding:16px;background:var(--bg-elevated);border-radius:var(--radius)">
-        <div id="avatar-preview-wrap">${avatarHtml}</div>
-        <div>
-          <div style="font-weight:600;margin-bottom:4px">${esc(App.user.username)}</div>
-          <label class="btn btn-sm btn-secondary" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px">
-            📷 Change Avatar
-            <input type="file" id="profile-avatar-file" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none">
+      <div style="background:var(--bg-elevated);border-radius:var(--radius);margin-bottom:20px;overflow:hidden">
+        <div id="banner-preview-wrap" style="${bannerStyle}">
+          <label class="btn btn-sm btn-secondary"
+            style="position:absolute;bottom:8px;right:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px">
+            🖼 Change Banner
+            <input type="file" id="profile-banner-file" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none">
           </label>
-          ${App.user.avatar ? `<button class="btn btn-sm btn-ghost" id="avatar-remove-btn" style="margin-left:4px" onclick="clearAvatar()">Remove</button>` : ''}
+          ${App.user.banner ? `<button class="btn btn-sm btn-ghost" onclick="ChirmSettings._clearBanner()"
+            style="position:absolute;bottom:8px;right:144px">Remove</button>` : ''}
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:12px;padding:0 16px 16px;margin-top:-36px;position:relative;z-index:1">
+          <div id="avatar-preview-wrap">${avatarHtml}</div>
+          <div style="flex:1">
+            <div style="font-weight:600;margin-bottom:4px">${esc(App.user.username)}</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <label class="btn btn-sm btn-secondary" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px">
+                📷 Change Avatar
+                <input type="file" id="profile-avatar-file" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none">
+              </label>
+              ${App.user.avatar ? `<button class="btn btn-sm btn-ghost" id="avatar-remove-btn" onclick="clearAvatar()">Remove</button>` : ''}
+            </div>
+          </div>
         </div>
       </div>
-      <div class="form-group"><label>Username</label><input type="text" id="profile-username" value="${esc(App.user.username)}"></div>
-      <div id="avatar-upload-status" style="font-size:12px;color:var(--text-muted);margin-top:-8px;margin-bottom:12px"></div>
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" id="profile-username" value="${esc(App.user.username)}">
+      </div>
+      <div class="form-group">
+        <label>About Me <span style="font-size:11px;color:var(--text-muted)">(markdown supported)</span></label>
+        <textarea id="profile-bio" rows="4" maxlength="500"
+          placeholder="Write something about yourself…"
+          style="resize:vertical;width:100%"
+          oninput="document.getElementById('bio-char-count').textContent=this.value.length">${escAttr(bio)}</textarea>
+        <div style="font-size:11px;color:var(--text-muted);text-align:right;margin-top:2px">
+          <span id="bio-char-count">${bio.length}</span>/500
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Links <span style="font-size:11px;color:var(--text-muted)">(up to 5)</span></label>
+        ${_buildLinksEditor()}
+        <button class="btn btn-sm btn-secondary" id="profile-add-link-btn">+ Add Link</button>
+      </div>
+      <div id="avatar-upload-status" style="font-size:12px;color:var(--text-muted);margin-bottom:8px"></div>
       <button class="btn btn-primary" id="profile-save-btn">Save Profile</button>
     `;
   }
@@ -343,56 +403,149 @@ const ChirmSettings = (() => {
   // ── Wire profile tab interactions ────────────────────────────────────────────
 
   function _wireProfile() {
-    const fileInput = document.getElementById('profile-avatar-file');
-    fileInput?.addEventListener('change', () => {
-      if (!fileInput.files?.length) return;
-      const file = fileInput.files[0];
+    // Avatar preview on file select
+    document.getElementById('profile-avatar-file')?.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = (ev) => {
         const wrap = document.getElementById('avatar-preview-wrap');
-        if (wrap) wrap.innerHTML = `<img src="${e.target.result}" style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:2px solid var(--accent)">`;
+        if (wrap) wrap.innerHTML = `<img src="${ev.target.result}" style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:3px solid var(--accent)">`;
       };
       reader.readAsDataURL(file);
       const status = document.getElementById('avatar-upload-status');
-      if (status) status.textContent = `Selected: ${file.name}`;
+      if (status) status.textContent = `Avatar selected: ${file.name}`;
+    });
+
+    // Banner preview on file select
+    document.getElementById('profile-banner-file')?.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const wrap = document.getElementById('banner-preview-wrap');
+        if (wrap) wrap.style.backgroundImage = `url('${ev.target.result}')`;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // Add link button
+    document.getElementById('profile-add-link-btn')?.addEventListener('click', () => {
+      if (_profileLinks.length >= 5) { toast('Maximum 5 links', 'error'); return; }
+      _profileLinks.push({ label: '', url: '' });
+      _refreshLinksEditor();
     });
 
     document.getElementById('profile-save-btn')?.addEventListener('click', async () => {
       const username = document.getElementById('profile-username').value.trim();
       if (!username) { toast('Username required', 'error'); return; }
 
-      const fileInput = document.getElementById('profile-avatar-file');
-      let avatarUrl = App.user.avatar || '';
+      const bio = document.getElementById('profile-bio')?.value || '';
+      const links = JSON.stringify(_profileLinks.filter(l => l.url.trim()));
 
-      if (fileInput?.files?.length > 0) {
+      const statusEl = document.getElementById('avatar-upload-status');
+
+      // Upload banner if selected
+      const bannerFile = document.getElementById('profile-banner-file')?.files?.[0];
+      if (bannerFile) {
         const formData = new FormData();
-        formData.append('avatar', fileInput.files[0]);
-        const statusEl = document.getElementById('avatar-upload-status');
+        formData.append('banner', bannerFile);
+        if (statusEl) statusEl.textContent = 'Uploading banner…';
+        try {
+          const res = await fetch('/api/v1/me/banner', { method: 'POST', credentials: 'include', body: formData });
+          if (!res.ok) {
+            const d = await res.json();
+            toast(d.error?.message || 'Banner upload failed', 'error');
+            return;
+          }
+          const updated = await res.json();
+          App.user = { ...App.user, ...updated };
+        } catch {
+          toast('Banner upload failed', 'error');
+          return;
+        }
+      }
+
+      // Upload avatar if selected
+      const avatarFile = document.getElementById('profile-avatar-file')?.files?.[0];
+      let avatarUrl = App.user.avatar || '';
+      if (avatarFile) {
+        const formData = new FormData();
+        formData.append('avatar', avatarFile);
         if (statusEl) statusEl.textContent = 'Uploading avatar…';
         try {
           const res = await fetch('/api/v1/me/avatar', { method: 'POST', credentials: 'include', body: formData });
           if (!res.ok) {
             const d = await res.json();
-            toast(d.error?.message || d.error || 'Avatar upload failed', 'error');
+            toast(d.error?.message || 'Avatar upload failed', 'error');
             return;
           }
           const updated = await res.json();
-          App.user = updated;
-          if (typeof window.renderUserPanel === 'function') window.renderUserPanel();
-          toast('Profile updated', 'success');
-          return;
+          App.user = { ...App.user, ...updated };
+          avatarUrl = App.user.avatar;
         } catch {
           toast('Avatar upload failed', 'error');
           return;
         }
       }
 
+      // Save profile data
+      if (statusEl) statusEl.textContent = '';
       try {
-        App.user = await api.put('/api/v1/me', { username, avatar: avatarUrl });
+        const updated = await api.put('/api/v1/me', { username, avatar: avatarUrl, bio, links });
+        App.user = updated;
         if (typeof window.renderUserPanel === 'function') window.renderUserPanel();
         toast('Profile updated', 'success');
-      } catch (e) { toast(e.message, 'error'); }
+      } catch (e) { toast(e.message || 'Failed to save profile', 'error'); }
     });
+  }
+
+  function _refreshLinksEditor() {
+    const list = document.getElementById('profile-links-list');
+    if (!list) return;
+    if (!_profileLinks.length) { list.innerHTML = ''; return; }
+    list.innerHTML = _profileLinks.map((l, i) => `
+      <div class="profile-link-row" style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+        <input type="text" placeholder="Label" value="${escAttr(l.label || '')}"
+          oninput="ChirmSettings._updateLink(${i},'label',this.value)"
+          style="flex:1;min-width:0">
+        <input type="text" placeholder="URL (https://…)" value="${escAttr(l.url || '')}"
+          oninput="ChirmSettings._updateLink(${i},'url',this.value)"
+          style="flex:2;min-width:0">
+        <button class="btn btn-sm btn-ghost" onclick="ChirmSettings.removeProfileLink(${i})" title="Remove">✕</button>
+      </div>
+    `).join('');
+  }
+
+  function addProfileLink() {
+    if (_profileLinks.length >= 5) { toast('Maximum 5 links', 'error'); return; }
+    _profileLinks.push({ label: '', url: '' });
+    _refreshLinksEditor();
+  }
+
+  function removeProfileLink(i) {
+    _profileLinks.splice(i, 1);
+    _refreshLinksEditor();
+  }
+
+  function _updateLink(i, field, value) {
+    if (_profileLinks[i]) _profileLinks[i][field] = value;
+  }
+
+  function _clearBanner() {
+    App.user.banner = '';
+    const wrap = document.getElementById('banner-preview-wrap');
+    if (wrap) {
+      wrap.style.background = 'linear-gradient(135deg,var(--accent),var(--bg-surface))';
+      wrap.style.backgroundImage = '';
+    }
+    api.put('/api/v1/me', {
+      username: App.user.username,
+      avatar: App.user.avatar || '',
+      bio: App.user.bio || '',
+      links: App.user.links || '[]',
+      banner: '',
+    }).then(u => { App.user = u; }).catch(() => {});
   }
 
   // ── Wire appearance tab interactions ─────────────────────────────────────────
@@ -540,6 +693,10 @@ const ChirmSettings = (() => {
     openSettingsModal,
     openUserSettings,
     switchUserSettingsTab,
+    addProfileLink,
+    removeProfileLink,
+    _updateLink,
+    _clearBanner,
   };
 })();
 

@@ -7,6 +7,7 @@ export const App = {
   categories: [],
   currentChannel: null,
   messages: {},          // channelId → []
+  messagesHasMore: {},   // channelId → bool
   members: [],
   roles: [],
   unread: new Set((() => { try { return JSON.parse(localStorage.getItem('chirm_unread') || '[]'); } catch { return []; } })()),

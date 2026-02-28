@@ -818,6 +818,8 @@ img.msg-inline-img {
 }
 .status-dot.online { background: var(--online); }
 .status-dot.offline { background: var(--offline); }
+.status-dot.idle { background: var(--idle); }
+.status-dot.invisible { background: var(--offline); opacity: 0.5; }
 
 /* ─── MODALS ─── */
 .modal-overlay {
@@ -2440,3 +2442,102 @@ pre code { background: none; border: none; padding: 0; }
     border-radius: 3px; padding: 1px 4px;
     vertical-align: middle; margin-left: 4px;
 }
+
+/* ── Status dot — DND ────────────────────────────────────── */
+.status-dot.dnd { background: var(--danger, #ed4245); }
+
+/* ── Status picker popup ─────────────────────────────────── */
+.status-picker {
+  position: fixed;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 6px;
+  z-index: 10000;
+  min-width: 168px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+}
+.status-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-primary);
+  user-select: none;
+}
+.status-option:hover { background: var(--bg-hover); }
+
+/* ── User info panel — hover hint ───────────────────────── */
+#user-info { transition: opacity 0.12s; }
+#user-info:hover { opacity: 0.82; }
+
+/* ── Profile view modal ──────────────────────────────────── */
+.profile-view-overlay { align-items: center; }
+.profile-view-modal {
+  position: relative;
+  width: 480px;
+  max-width: 95vw;
+  padding: 0;
+  overflow: hidden;
+}
+.profile-banner {
+  aspect-ratio: 16 / 9;
+  flex-shrink: 0;
+}
+.profile-header {
+  padding: 0 20px 12px;
+  margin-top: -40px;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+.profile-avatar-wrap .avatar {
+  border: 4px solid var(--bg-surface);
+  border-radius: 50%;
+}
+.profile-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  flex-wrap: wrap;
+}
+.profile-username { font-size: 20px; font-weight: 700; }
+.profile-status-label {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.profile-body { padding: 0 20px 20px; overflow-y: auto; max-height: 50vh; }
+.profile-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-top: 16px;
+  margin-bottom: 6px;
+}
+.profile-bio {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  overflow-wrap: break-word;
+}
+.profile-meta { margin-bottom: 4px; font-size: 13px; }
+.profile-links { display: flex; flex-direction: column; gap: 4px; }
+.profile-link {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+.profile-link:hover { text-decoration: underline; }

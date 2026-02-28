@@ -26,7 +26,7 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msgs, err := h.db.GetMessages(channelID, before, limit)
+	msgs, err := h.db.GetMessages(channelID, before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to get messages")
 		return
@@ -34,7 +34,11 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
 	if msgs == nil {
 		msgs = []db.Message{}
 	}
-	ok(w, msgs)
+	hasMore := len(msgs) > limit
+	if hasMore {
+		msgs = msgs[:limit]
+	}
+	ok(w, map[string]interface{}{"messages": msgs, "has_more": hasMore})
 }
 
 func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {

@@ -162,11 +162,11 @@
 
   async function init() {
     // Redirect if already logged in
-    const me = await fetch('/api/me', { credentials: 'include' }).then(r => r.json()).catch(() => null);
+    const me = await fetch('/api/v1/me', { credentials: 'include' }).then(r => r.json()).catch(() => null);
     if (me?.id) { window.location.href = '/'; return; }
 
-    // Load public settings (Fix 1/3A/3B/3C/4 — public endpoint, no auth required)
-    const settings = await fetch('/api/public-settings').then(r => r.json()).catch(() => ({}));
+    // Load public settings
+    const settings = await fetch('/api/v1/public-settings').then(r => r.json()).catch(() => ({}));
     _settings = settings;
 
     // Fix 3B: Server name
@@ -199,7 +199,16 @@
       authPage.style.background = settings.login_bg_color;
     }
 
-    // Fix 1: Require invite group
+    // Apply server theme CSS variables
+    if (settings.theme_css_vars) {
+      try {
+        const vars = JSON.parse(settings.theme_css_vars);
+        const root = document.documentElement;
+        Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v));
+      } catch {}
+    }
+
+    // Require invite group
     if (settings.require_invite === '1') {
       document.getElementById('invite-group').style.display = 'block';
     }
@@ -244,7 +253,7 @@
     const password = document.getElementById('login-pass').value;
     if (!login || !password) { showError('Please fill in all fields.'); return; }
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch('/api/v1/auth/login', {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ login, password }),
@@ -286,7 +295,7 @@
     }
 
     try {
-      const res = await fetch('/api/auth/register', {
+      const res = await fetch('/api/v1/auth/register', {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, email, password, invite_code }),
@@ -327,7 +336,7 @@
     const form = new FormData();
     form.append('avatar', _avatarBlob);
     try {
-      await fetch('/api/me/avatar', { method: 'POST', credentials: 'include', body: form });
+      await fetch('/api/v1/me/avatar', { method: 'POST', credentials: 'include', body: form });
     } catch (e) { /* non-critical, continue anyway */ }
     window.location.href = '/';
   }

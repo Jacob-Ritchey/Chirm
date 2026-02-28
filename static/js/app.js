@@ -16,8 +16,8 @@ ChirmTheme.loadUserTheme();
 
 // ─── RENDER / UTILITY MODULES ─────────────────────────────────────────────────
 import { toast, avatar, stringToColor, esc, escInline, escAttr, formatTime, formatSize, formatTimeShort, renderContent, isAdmin, resizeInput } from './utils.js';
-import { loadMembers, renderUserPanel, renderMembersList } from './render/members.js';
-import { openModal, closeModal, showSimpleModal, openProfile, clearAvatar } from './render/modals.js';
+import { loadMembers, renderUserPanel, renderMembersList, openStatusPicker, setMyStatus } from './render/members.js';
+import { openModal, closeModal, showSimpleModal, openProfile, clearAvatar, viewUserProfile } from './render/modals.js';
 import { handleFileUpload, showUploadPreview, clearUploadPreview, openImageViewer } from './render/media.js';
 import {
   renderMessages, renderMessage, renderReactions, updateReactionsInDOM,
@@ -224,10 +224,12 @@ async function openChannel(ch) {
     scrollToBottom(true);
   }
 
-  api.get(`/api/v1/channels/${channelId}/messages`).catch(() => []).then(freshMsgs => {
+  api.get(`/api/v1/channels/${channelId}/messages`).catch(() => ({ messages: [], has_more: false })).then(data => {
     if (App.currentChannel?.id !== channelId) return;
 
-    const freshMsgList = freshMsgs || [];
+    const freshMsgList = (Array.isArray(data) ? data : (data.messages ?? []));
+    App.messagesHasMore[channelId] = Array.isArray(data) ? false : (data.has_more ?? false);
+
     const freshIds = new Set(freshMsgList.map(m => m.id));
     const wsOnlyMsgs = (App.messages[channelId] || []).filter(m => !freshIds.has(m.id));
     const merged = [...freshMsgList, ...wsOnlyMsgs].sort(
@@ -425,6 +427,12 @@ function setupWSHandlers() {
   WS.on('member.leave', ({ id }) => {
     App.members = App.members.filter(m => m.id !== id);
     renderMembersList();
+  });
+
+  WS.on('member.status', ({ id, status }) => {
+    const m = App.members.find(m => m.id === id);
+    if (m) { m.status = status; renderMembersList(); }
+    if (App.user?.id === id) { App.user.status = status; renderUserPanel(); }
   });
 
   WS.on('typing', ({ user_id, channel_id }) => {
@@ -705,13 +713,16 @@ window.toggleMembers  = toggleMembers;
 // Members
 window.renderUserPanel   = renderUserPanel;
 window.renderMembersList = renderMembersList;
+window.openStatusPicker  = openStatusPicker;
+window.setMyStatus       = setMyStatus;
 
 // Modals
 window.openModal       = openModal;
 window.closeModal      = closeModal;
 window.showSimpleModal = showSimpleModal;
-window.openProfile     = openProfile;
-window.clearAvatar     = clearAvatar;
+window.openProfile      = openProfile;
+window.clearAvatar      = clearAvatar;
+window.viewUserProfile  = viewUserProfile;
 
 // Media
 window.openImageViewer    = openImageViewer;

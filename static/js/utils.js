@@ -12,14 +12,15 @@ export function toast(msg, type = 'info') {
   setTimeout(() => el.remove(), 3500);
 }
 
-export function avatar(user, size = '') {
+export function avatar(user, size = '', status = '') {
   const cls = `avatar ${size}`;
+  const dot = status ? `<div class="status-dot ${status}"></div>` : '';
   if (user?.avatar) {
-    return `<div class="${cls}"><img src="${user.avatar}" alt="${esc(user.username)}"><div class="status-dot online"></div></div>`;
+    return `<div class="${cls}"><img src="${user.avatar}" alt="${esc(user.username)}">${dot}</div>`;
   }
   const initials = (user?.username || '?')[0].toUpperCase();
   const color = stringToColor(user?.username || '');
-  return `<div class="${cls}" style="background:${color}">${initials}<div class="status-dot online"></div></div>`;
+  return `<div class="${cls}" style="background:${color}">${initials}${dot}</div>`;
 }
 
 export function stringToColor(str) {

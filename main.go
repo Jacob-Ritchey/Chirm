@@ -138,11 +138,26 @@ func main() {
 	})
 	bus.Subscribe(events.UserJoined, func(e events.Event) {
 		d := e.Data.(events.UserJoinedData)
-		wsHub.Broadcast(hub.WSEvent{Type: "member.new", Data: d.User})
+		u := d.User
+		if u.Status == "invisible" {
+			u.Status = "offline"
+		}
+		wsHub.Broadcast(hub.WSEvent{Type: "member.new", Data: u})
 	})
 	bus.Subscribe(events.UserLeft, func(e events.Event) {
 		d := e.Data.(events.UserLeftData)
 		wsHub.Broadcast(hub.WSEvent{Type: "member.leave", Data: map[string]string{"id": d.UserID}})
+	})
+	bus.Subscribe(events.UserStatusChanged, func(e events.Event) {
+		d := e.Data.(events.UserStatusChangedData)
+		broadcastStatus := d.Status
+		if broadcastStatus == "invisible" {
+			broadcastStatus = "offline"
+		}
+		wsHub.Broadcast(hub.WSEvent{Type: "member.status", Data: map[string]string{
+			"id":     d.UserID,
+			"status": broadcastStatus,
+		}})
 	})
 
 	r := chi.NewRouter()

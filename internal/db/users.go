@@ -24,8 +24,8 @@ func (d *DB) GetUserByID(id string) (*User, error) {
 	u := &User{}
 	var owner int
 	err := d.QueryRow(
-		`SELECT id, username, email, password_hash, avatar, is_owner, created_at FROM users WHERE id = ?`, id,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Avatar, &owner, &u.CreatedAt)
+		`SELECT id, username, email, password_hash, avatar, COALESCE(bio,''), COALESCE(links,'[]'), COALESCE(banner,''), COALESCE(status,'online'), is_owner, created_at FROM users WHERE id = ?`, id,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Avatar, &u.Bio, &u.Links, &u.Banner, &u.Status, &owner, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -39,8 +39,8 @@ func (d *DB) GetUserByUsername(username string) (*User, error) {
 	u := &User{}
 	var owner int
 	err := d.QueryRow(
-		`SELECT id, username, email, password_hash, avatar, is_owner, created_at FROM users WHERE username = ?`, username,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Avatar, &owner, &u.CreatedAt)
+		`SELECT id, username, email, password_hash, avatar, COALESCE(bio,''), COALESCE(links,'[]'), COALESCE(banner,''), COALESCE(status,'online'), is_owner, created_at FROM users WHERE username = ?`, username,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Avatar, &u.Bio, &u.Links, &u.Banner, &u.Status, &owner, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -54,8 +54,8 @@ func (d *DB) GetUserByEmail(email string) (*User, error) {
 	u := &User{}
 	var owner int
 	err := d.QueryRow(
-		`SELECT id, username, email, password_hash, avatar, is_owner, created_at FROM users WHERE email = ?`, email,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Avatar, &owner, &u.CreatedAt)
+		`SELECT id, username, email, password_hash, avatar, COALESCE(bio,''), COALESCE(links,'[]'), COALESCE(banner,''), COALESCE(status,'online'), is_owner, created_at FROM users WHERE email = ?`, email,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Avatar, &u.Bio, &u.Links, &u.Banner, &u.Status, &owner, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func (d *DB) GetUserByEmail(email string) (*User, error) {
 }
 
 func (d *DB) ListUsers() ([]User, error) {
-	rows, err := d.Query(`SELECT id, username, email, avatar, is_owner, created_at FROM users ORDER BY created_at ASC`)
+	rows, err := d.Query(`SELECT id, username, email, avatar, COALESCE(bio,''), COALESCE(links,'[]'), COALESCE(banner,''), COALESCE(status,'online'), is_owner, created_at FROM users ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (d *DB) ListUsers() ([]User, error) {
 	for rows.Next() {
 		var u User
 		var owner int
-		rows.Scan(&u.ID, &u.Username, &u.Email, &u.Avatar, &owner, &u.CreatedAt)
+		rows.Scan(&u.ID, &u.Username, &u.Email, &u.Avatar, &u.Bio, &u.Links, &u.Banner, &u.Status, &owner, &u.CreatedAt)
 		u.IsOwner = owner == 1
 		u.Roles, _ = d.GetUserRoles(u.ID)
 		users = append(users, u)
@@ -87,9 +87,9 @@ func (d *DB) ListUsersPaginated(before string, limit int) ([]User, error) {
 	var rows *sql.Rows
 	var err error
 	if before == "" {
-		rows, err = d.Query(`SELECT id, username, email, avatar, is_owner, created_at FROM users ORDER BY created_at ASC LIMIT ?`, limit)
+		rows, err = d.Query(`SELECT id, username, email, avatar, COALESCE(bio,''), COALESCE(links,'[]'), COALESCE(banner,''), COALESCE(status,'online'), is_owner, created_at FROM users ORDER BY created_at ASC LIMIT ?`, limit)
 	} else {
-		rows, err = d.Query(`SELECT id, username, email, avatar, is_owner, created_at FROM users WHERE created_at > (SELECT created_at FROM users WHERE id = ?) ORDER BY created_at ASC LIMIT ?`, before, limit)
+		rows, err = d.Query(`SELECT id, username, email, avatar, COALESCE(bio,''), COALESCE(links,'[]'), COALESCE(banner,''), COALESCE(status,'online'), is_owner, created_at FROM users WHERE created_at > (SELECT created_at FROM users WHERE id = ?) ORDER BY created_at ASC LIMIT ?`, before, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -99,7 +99,7 @@ func (d *DB) ListUsersPaginated(before string, limit int) ([]User, error) {
 	for rows.Next() {
 		var u User
 		var owner int
-		rows.Scan(&u.ID, &u.Username, &u.Email, &u.Avatar, &owner, &u.CreatedAt)
+		rows.Scan(&u.ID, &u.Username, &u.Email, &u.Avatar, &u.Bio, &u.Links, &u.Banner, &u.Status, &owner, &u.CreatedAt)
 		u.IsOwner = owner == 1
 		u.Roles, _ = d.GetUserRoles(u.ID)
 		users = append(users, u)
@@ -109,6 +109,21 @@ func (d *DB) ListUsersPaginated(before string, limit int) ([]User, error) {
 
 func (d *DB) UpdateUser(id, username, avatar string) error {
 	_, err := d.Exec(`UPDATE users SET username = ?, avatar = ? WHERE id = ?`, username, avatar, id)
+	return err
+}
+
+func (d *DB) UpdateUserProfile(id, username, avatar, bio, links string) error {
+	_, err := d.Exec(`UPDATE users SET username = ?, avatar = ?, bio = ?, links = ? WHERE id = ?`, username, avatar, bio, links, id)
+	return err
+}
+
+func (d *DB) UpdateUserBanner(id, banner string) error {
+	_, err := d.Exec(`UPDATE users SET banner = ? WHERE id = ?`, banner, id)
+	return err
+}
+
+func (d *DB) UpdateUserStatus(id, status string) error {
+	_, err := d.Exec(`UPDATE users SET status = ? WHERE id = ?`, status, id)
 	return err
 }
 

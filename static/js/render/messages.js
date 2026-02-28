@@ -25,11 +25,13 @@ export function renderMessages(channelId) {
 
   list.innerHTML = '';
 
-  const loadMoreBtn = document.createElement('button');
-  loadMoreBtn.className = 'load-more-btn';
-  loadMoreBtn.textContent = 'Load earlier messages';
-  loadMoreBtn.onclick = () => loadMoreMessages(channelId);
-  list.appendChild(loadMoreBtn);
+  if (App.messagesHasMore[channelId]) {
+    const loadMoreBtn = document.createElement('button');
+    loadMoreBtn.className = 'load-more-btn';
+    loadMoreBtn.textContent = 'Load earlier messages';
+    loadMoreBtn.onclick = () => loadMoreMessages(channelId);
+    list.appendChild(loadMoreBtn);
+  }
 
   let lastUserId = null;
   let lastTimestamp = null;
@@ -96,13 +98,19 @@ export function renderMessage(msg, continued = false) {
     ${canDelete ? `<button class="msg-toolbar-btn danger" title="Delete" onclick="deleteMessage('${msgIdSafe}')">🗑</button>` : ''}
   </div>`;
 
+  const memberStatus = App.members.find(m => m.id === msg.author?.id)?.status || '';
+  const authorClickable = !isBot && msg.author?.id;
+  const authorOnClick = authorClickable ? `onclick="window.viewUserProfile?.('${esc(msg.author.id)}')" style="cursor:pointer"` : '';
+
   el.innerHTML = `
     ${toolbar}
-    <div class="msg-avatar-col">${!continued ? (isBot ? `<div class="avatar avatar-sm" style="background:var(--accent);font-size:14px">🤖</div>` : avatar(msg.author, 'avatar-sm')) : `<span class="msg-time-hover">${formatTimeShort(msg.created_at)}</span>`}</div>
+    <div class="msg-avatar-col" ${authorClickable ? `onclick="window.viewUserProfile?.('${esc(msg.author.id)}')" style="cursor:pointer"` : ''}>
+      ${!continued ? (isBot ? `<div class="avatar avatar-sm" style="background:var(--accent);font-size:14px">🤖</div>` : avatar(msg.author, 'avatar-sm', memberStatus)) : `<span class="msg-time-hover">${formatTimeShort(msg.created_at)}</span>`}
+    </div>
     <div class="msg-body">
       ${replyHtml}
       ${!continued ? `<div class="msg-header">
-        <span class="msg-author" style="color:${authorColor}">${escInline(authorName)}</span>${botBadge}
+        <span class="msg-author" style="color:${authorColor}" ${authorOnClick}>${escInline(authorName)}</span>${botBadge}
         <span class="msg-timestamp">${formatTime(msg.created_at)}</span>
         ${msg.edited_at ? '<span class="msg-edited">(edited)</span>' : ''}
       </div>` : ''}
@@ -271,16 +279,21 @@ export function scrollToMessage(id) {
 
 async function loadMessages(channelId, before = null) {
   const url = `/api/channels/${channelId}/messages${before ? `?before=${before}` : ''}`;
-  return api.get(url).catch(() => []);
+  const res = await api.get(url).catch(() => ({ messages: [], has_more: false }));
+  if (Array.isArray(res)) return { messages: res, hasMore: false };
+  return { messages: res.messages ?? [], hasMore: res.has_more ?? false };
 }
 
 export async function loadMoreMessages(channelId) {
   const existing = App.messages[channelId] || [];
   if (!existing.length) return;
   const oldest = existing[0];
-  const more = await loadMessages(channelId, oldest.id);
+  const { messages: more, hasMore } = await loadMessages(channelId, oldest.id);
+  App.messagesHasMore[channelId] = hasMore;
   if (!more.length) {
+    App.messagesHasMore[channelId] = false;
     toast('No more messages to load', 'info');
+    renderMessages(channelId);
     return;
   }
   App.messages[channelId] = [...more, ...existing];

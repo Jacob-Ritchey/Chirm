@@ -18,6 +18,10 @@ type User struct {
 	Email        string    `json:"email,omitempty"`
 	PasswordHash string    `json:"-"`
 	Avatar       string    `json:"avatar"`
+	Bio          string    `json:"bio"`
+	Links        string    `json:"links"`   // JSON: [{"label":"...","url":"..."}]
+	Banner       string    `json:"banner"`
+	Status       string    `json:"status"`  // online | away | dnd
 	IsOwner      bool      `json:"is_owner"`
 	CreatedAt    time.Time `json:"created_at"`
 	Roles        []Role    `json:"roles,omitempty"`

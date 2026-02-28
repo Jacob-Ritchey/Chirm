@@ -47,6 +47,8 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 			r.Get("/me", h.GetMe)
 			r.Put("/me", h.UpdateMe)
 			r.Post("/me/avatar", h.UploadAvatar)
+			r.Post("/me/banner", h.UploadBanner)
+			r.Put("/me/status", h.UpdateStatus)
 
 			r.Get("/channels", h.ListChannels)
 			r.Post("/channels", h.CreateChannel)
@@ -76,6 +78,7 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 			r.Post("/upload", h.Upload)
 
 			r.Get("/users", h.ListUsers)
+			r.Get("/users/{id}", h.GetUserProfile)
 			r.Put("/users/{id}", h.UpdateUser)
 			r.Delete("/users/{id}", h.DeleteUser)
 
