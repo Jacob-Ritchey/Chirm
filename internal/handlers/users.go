@@ -316,6 +316,7 @@ func (h *Handler) GetPublicSettings(w http.ResponseWriter, r *http.Request) {
 		"login_bg_color", "login_bg_image", "login_bg_overlay",
 		"require_invite", "allow_registration",
 		"agreement_enabled", "agreement_text",
+		"theme_css_vars",
 	}
 	result := make(map[string]string)
 	for _, k := range publicKeys {
@@ -364,6 +365,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		"login_bg_overlay":   true,
 		"agreement_enabled":  true,
 		"agreement_text":     true,
+		"theme_css_vars":     true,
 	}
 	for k, v := range req {
 		if allowed[k] {

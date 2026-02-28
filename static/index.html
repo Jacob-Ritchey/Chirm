@@ -60,8 +60,7 @@
         <!-- Populated by JS -->
       </div>
       <div id="user-panel-actions">
-        <button onclick="openProfile()" title="Edit Profile">⚙</button>
-        <button onclick="ChirmSettings.openSettingsModal()" title="Notification Settings" id="notif-settings-btn">🔔</button>
+        <button onclick="ChirmSettings.openUserSettings('profile')" title="Settings">⚙</button>
         <button id="admin-btn" onclick="openAdmin()" title="Admin Panel" style="display:none">🛡</button>
         <button onclick="logout()" title="Logout">⏻</button>
       </div>
@@ -140,6 +139,7 @@
         <button class="admin-tab" data-tab="invites" onclick="switchAdminTab('invites')">Invites</button>
         <button class="admin-tab" data-tab="emojis" onclick="switchAdminTab('emojis')">Emoji</button>
         <button class="admin-tab" data-tab="settings" onclick="switchAdminTab('settings')">Settings</button>
+        <button class="admin-tab" data-tab="theme" onclick="switchAdminTab('theme')">Theme</button>
       </div>
 
       <div id="admin-pane-users" class="admin-pane active">
@@ -160,6 +160,10 @@
 
       <div id="admin-pane-settings" class="admin-pane">
         <div id="admin-settings-form">Loading…</div>
+      </div>
+
+      <div id="admin-pane-theme" class="admin-pane">
+        <div id="admin-theme-form">Loading…</div>
       </div>
     </div>
   </div>

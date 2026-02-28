@@ -1,10 +1,11 @@
-// render/admin.js — Admin panel: users, roles, invites, settings, emojis
+// render/admin.js — Admin panel: users, roles, invites, settings, emojis, theme
 
 import App from '../state.js';
 import api from '../api.js';
 import { toast, esc, escInline, stringToColor } from '../utils.js';
 import { loadMembers, renderMembersList } from './members.js';
 import { showSimpleModal } from './modals.js';
+import ChirmTheme from '../theme.js';
 
 export function openAdmin() {
   if (typeof window.openModal === 'function') window.openModal('admin-modal');
@@ -22,6 +23,7 @@ export async function loadAdminUsers() {
   renderAdminRoles(rolesPage.items ?? rolesPage, rolesPage.has_more);
   renderAdminInvites(invitesPage.items ?? invitesPage, settings);
   renderAdminSettings(settings);
+  renderAdminTheme(settings);
   await renderAdminEmojis();
 }
 
@@ -286,12 +288,150 @@ export async function saveSettings() {
   };
   try {
     await api.put('/api/v1/settings', settings);
+    App.publicSettings = null; // invalidate cache so header re-fetches
     toast('Settings saved', 'success');
-    // Refresh the server header (window global set by app.js)
     if (typeof window.renderServerHeader === 'function') window.renderServerHeader();
   } catch (e) {
     toast(e.message, 'error');
   }
+}
+
+export function renderAdminTheme(settings) {
+  const el = document.getElementById('admin-theme-form');
+  if (!el) return;
+
+  const serverVars = (() => {
+    try { return JSON.parse(settings.theme_css_vars || '{}'); } catch { return {}; }
+  })();
+
+  const currentValue = (key) => {
+    if (serverVars[key]) return serverVars[key];
+    return getComputedStyle(document.documentElement).getPropertyValue(key).trim();
+  };
+
+  const buildPresetSelect = () => {
+    const custom = ChirmTheme.getCustomPresets();
+    const builtinOpts = ChirmTheme.THEME_PRESETS.map(p =>
+      `<option value="${esc(p.name)}">${esc(p.name)}</option>`
+    ).join('');
+    const customOpts = custom.length
+      ? `<optgroup label="Custom">${custom.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('')}</optgroup>`
+      : '';
+    return `<optgroup label="Built-in">${builtinOpts}</optgroup>${customOpts}`;
+  };
+
+  const groups = ChirmTheme.COLOR_GROUPS.map(g => {
+    const items = g.vars.map(v => {
+      const val = currentValue(v.key);
+      const inputId = `admin-theme-input-${v.key.slice(2)}`;
+      return `<div class="theme-color-item">
+        <input type="color" id="${inputId}" value="${esc(val)}" title="${esc(v.key)}"
+          oninput="document.documentElement.style.setProperty('${v.key}', this.value)">
+        <label for="${inputId}">${esc(v.label)}</label>
+      </div>`;
+    }).join('');
+    return `<div style="margin-bottom:16px">
+      <h4 style="font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);margin-bottom:10px">${esc(g.label)}</h4>
+      <div class="theme-color-grid">${items}</div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="form-group">
+      <label>Preset Themes</label>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px">
+        <select id="admin-theme-preset" style="flex:1;min-width:160px">
+          <option value="">— Select a preset to fill pickers —</option>
+          ${buildPresetSelect()}
+        </select>
+        <button class="btn btn-sm btn-secondary" onclick="applyAdminThemePreset()">Apply</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteAdminThemePreset()" title="Delete selected custom preset">🗑</button>
+      </div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:4px">
+        Sets the server-wide default palette. Users can override in their own Appearance settings.
+      </p>
+    </div>
+    ${groups}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn btn-primary" onclick="saveAdminTheme()">Save as Server Theme</button>
+      <button class="btn btn-secondary" onclick="clearAdminTheme()">Reset to CSS Defaults</button>
+    </div>
+    <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:16px">
+      <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-secondary);display:block;margin-bottom:6px">Save as Local Preset</label>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="admin-theme-preset-name" placeholder="My Theme" style="flex:1;min-width:120px">
+        <button class="btn btn-sm btn-secondary" onclick="saveAdminLocalPreset()">Save Preset</button>
+      </div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:4px">Saves to your browser's local storage for reuse.</p>
+    </div>
+  `;
+}
+
+export async function saveAdminTheme() {
+  const vars = {};
+  for (const { key } of ChirmTheme.COLOR_VARS.map(k => ({ key: k }))) {
+    const inputId = `admin-theme-input-${key.slice(2)}`;
+    const el = document.getElementById(inputId);
+    if (el) vars[key] = el.value;
+  }
+  try {
+    await api.put('/api/v1/settings', { theme_css_vars: JSON.stringify(vars) });
+    App.publicSettings = null; // invalidate cache
+    ChirmTheme.applyVars(vars);
+    toast('Server theme saved', 'success');
+    // Re-fetch so publicSettings.theme_css_vars is fresh
+    const fresh = await api.get('/api/v1/public-settings').catch(() => null);
+    if (fresh) App.publicSettings = fresh;
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+export async function clearAdminTheme() {
+  try {
+    await api.put('/api/v1/settings', { theme_css_vars: '{}' });
+    App.publicSettings = null;
+    ChirmTheme.COLOR_VARS.forEach(v => document.documentElement.style.removeProperty(v));
+    toast('Server theme reset to CSS defaults', 'info');
+    const fresh = await api.get('/api/v1/public-settings').catch(() => null);
+    if (fresh) App.publicSettings = fresh;
+    loadAdminUsers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+export function applyAdminThemePreset() {
+  const name = document.getElementById('admin-theme-preset')?.value;
+  if (!name) return;
+  const preset = ChirmTheme.getAllPresets().find(p => p.name === name);
+  if (!preset) return;
+  for (const [key, val] of Object.entries(preset.vars)) {
+    const el = document.getElementById(`admin-theme-input-${key.slice(2)}`);
+    if (el) el.value = val;
+  }
+  ChirmTheme.applyVars(preset.vars);
+}
+
+export function deleteAdminThemePreset() {
+  const name = document.getElementById('admin-theme-preset')?.value;
+  if (!name) return;
+  if (ChirmTheme.THEME_PRESETS.some(p => p.name === name)) {
+    toast('Cannot delete built-in presets', 'error');
+    return;
+  }
+  ChirmTheme.deleteCustomPreset(name);
+  toast(`Preset "${name}" deleted`, 'info');
+  loadAdminUsers(); // re-renders theme tab
+}
+
+export function saveAdminLocalPreset() {
+  const name = document.getElementById('admin-theme-preset-name')?.value.trim();
+  if (!name) { toast('Enter a preset name', 'error'); return; }
+  const vars = {};
+  for (const key of ChirmTheme.COLOR_VARS) {
+    const el = document.getElementById(`admin-theme-input-${key.slice(2)}`);
+    if (el) vars[key] = el.value;
+  }
+  ChirmTheme.saveCustomPreset(name, vars);
+  toast(`Preset "${name}" saved locally`, 'success');
+  loadAdminUsers(); // re-renders theme tab with updated dropdown
 }
 
 export async function adminDeleteUser(id, name) {

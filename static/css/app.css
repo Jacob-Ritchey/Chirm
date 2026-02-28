@@ -70,6 +70,9 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Suppress transitions during initial UI state restore to prevent collapse flash */
+.no-transition, .no-transition * { transition: none !important; animation: none !important; }
+
 html { height: 100%; }
 body { height: 100%; overflow: hidden; background: var(--bg-void); color: var(--text-primary); }
 
@@ -98,8 +101,13 @@ body { height: 100%; overflow: hidden; background: var(--bg-void); color: var(--
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
-  /* Ensure it never collapses below its defined width */
   min-width: var(--sidebar-w);
+  transition: width 0.25s ease, min-width 0.25s ease, border-color 0.25s ease;
+}
+#sidebar.desktop-collapsed {
+  width: 0;
+  min-width: 0;
+  border-right-color: transparent;
 }
 
 #server-header {
@@ -862,6 +870,41 @@ img.msg-inline-img {
 .admin-tab:hover { color: var(--text-primary); }
 .admin-pane { display: none; }
 .admin-pane.active { display: block; }
+/* user settings panes reuse .admin-tabs/.admin-tab; pane visibility is toggled via inline style */
+.us-pane { display: none; }
+.us-pane.active { display: block; }
+
+/* ─── THEME PICKER ─── */
+.theme-color-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px 16px;
+  margin-bottom: 4px;
+}
+.theme-color-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.theme-color-item input[type="color"] {
+  width: 32px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: var(--bg-elevated);
+  padding: 2px;
+}
+.theme-color-item label {
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-secondary);
+  margin: 0;
+  cursor: pointer;
+}
 
 /* ─── FORMS ─── */
 .form-group { margin-bottom: 16px; }
@@ -1124,9 +1167,9 @@ pre code { background: none; border: none; padding: 0; }
 }
 #sidebar-overlay.open { display: block; }
 
-/* ─── HAMBURGER BUTTON (mobile only) ─── */
+/* ─── HAMBURGER / SIDEBAR TOGGLE BUTTON ─── */
 #hamburger-btn {
-  display: none;
+  display: flex;
   background: none; border: none; cursor: pointer;
   color: var(--text-secondary); font-size: 20px;
   padding: 4px 8px; border-radius: var(--radius-sm);

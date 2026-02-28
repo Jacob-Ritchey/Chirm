@@ -1,5 +1,3 @@
-import ChirmNotifs from './notifications.js';
-
 // user-settings.js — Chirm User Settings
 // Locally persisted settings (localStorage).
 // Settings schema:
@@ -7,6 +5,13 @@ import ChirmNotifs from './notifications.js';
 //   mutedChannels: string[]  — channel IDs where ALL notifications are muted
 //   notifyGranted: bool      — whether user has been asked about notifications
 //   inBrowserOnly: bool      — suppress OS/push notifications; in-app toasts only
+
+import App from './state.js';
+import api from './api.js';
+import { toast, esc, stringToColor } from './utils.js';
+import ChirmCache from './cache.js';
+import ChirmNotifs from './notifications.js';
+import ChirmTheme from './theme.js';
 
 const ChirmSettings = (() => {
   const STORAGE_KEY = 'chirm_user_settings';
@@ -87,11 +92,43 @@ const ChirmSettings = (() => {
     return !!get().inBrowserOnly;
   }
 
-  // ── Settings Modal UI ───────────────────────────────────────────────────────
+  // ── Tab switcher ────────────────────────────────────────────────────────────
 
-  function openSettingsModal() {
+  function switchUserSettingsTab(tab) {
+    const modal = document.getElementById('user-settings-modal');
+    if (!modal) return;
+    modal.querySelectorAll('.us-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    modal.querySelectorAll('.us-pane').forEach(p => p.classList.toggle('active', p.id === `us-pane-${tab}`));
+  }
+
+  // ── Profile tab HTML ────────────────────────────────────────────────────────
+
+  function _buildProfileTab() {
+    const avatarHtml = App.user.avatar
+      ? `<img src="${esc(App.user.avatar)}" style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:2px solid var(--border-strong)">`
+      : `<div class="avatar avatar-lg" style="background:${stringToColor(App.user.username)}">${App.user.username[0].toUpperCase()}</div>`;
+    return `
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;padding:16px;background:var(--bg-elevated);border-radius:var(--radius)">
+        <div id="avatar-preview-wrap">${avatarHtml}</div>
+        <div>
+          <div style="font-weight:600;margin-bottom:4px">${esc(App.user.username)}</div>
+          <label class="btn btn-sm btn-secondary" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px">
+            📷 Change Avatar
+            <input type="file" id="profile-avatar-file" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none">
+          </label>
+          ${App.user.avatar ? `<button class="btn btn-sm btn-ghost" id="avatar-remove-btn" style="margin-left:4px" onclick="clearAvatar()">Remove</button>` : ''}
+        </div>
+      </div>
+      <div class="form-group"><label>Username</label><input type="text" id="profile-username" value="${esc(App.user.username)}"></div>
+      <div id="avatar-upload-status" style="font-size:12px;color:var(--text-muted);margin-top:-8px;margin-bottom:12px"></div>
+      <button class="btn btn-primary" id="profile-save-btn">Save Profile</button>
+    `;
+  }
+
+  // ── Notifications tab HTML ──────────────────────────────────────────────────
+
+  function _buildNotificationsTab() {
     const s = get();
-    // Safely read permission state even if ChirmNotifs hasn't fully initialized yet
     const currentPerm = ('Notification' in window) ? Notification.permission : 'denied';
     const notifGranted = currentPerm === 'granted';
     const notifDenied  = currentPerm === 'denied';
@@ -126,11 +163,10 @@ const ChirmSettings = (() => {
       </div>`;
     }
 
-    const bodyHtml = `
+    return `
       <div class="settings-section">
         <h4 class="settings-section-title">Notifications</h4>
         <div style="margin-bottom:12px">${notifSection}</div>
-
         <label class="settings-toggle-row">
           <div>
             <div class="settings-row-label">Disable @mention pings</div>
@@ -138,7 +174,6 @@ const ChirmSettings = (() => {
           </div>
           <input type="checkbox" id="settings-disable-pings" ${s.disablePings ? 'checked' : ''}>
         </label>
-
         <label class="settings-toggle-row">
           <div>
             <div class="settings-row-label">In-browser notifications only</div>
@@ -147,7 +182,6 @@ const ChirmSettings = (() => {
           <input type="checkbox" id="settings-in-browser-only" ${s.inBrowserOnly ? 'checked' : ''}>
         </label>
       </div>
-
       <div class="settings-section">
         <h4 class="settings-section-title">Channel Notifications</h4>
         <div class="settings-row-hint" style="margin-bottom:10px">
@@ -157,7 +191,6 @@ const ChirmSettings = (() => {
           ${channelRows || '<p class="text-muted" style="font-size:13px">No text channels available.</p>'}
         </div>
       </div>
-
       <div class="settings-section">
         <h4 class="settings-section-title">Cache</h4>
         <div class="settings-row-hint" style="margin-bottom:10px">
@@ -166,92 +199,332 @@ const ChirmSettings = (() => {
         <button class="btn btn-sm btn-secondary" id="settings-clear-cache">Clear Message Cache</button>
       </div>
     `;
+  }
 
-    showSimpleModal('⚙ Notification Settings', bodyHtml, null);
+  // ── Appearance tab HTML ─────────────────────────────────────────────────────
 
-    // Wire up interactions after modal renders
-    setTimeout(() => {
-      // Enable notifications button
-      document.getElementById('settings-enable-notifs')?.addEventListener('click', async () => {
-        const result = await ChirmNotifs.requestPermission();
-        if (result === 'granted') {
-          toast('Notifications enabled!', 'success');
-          document.querySelector('.modal-overlay')?.remove();
-          openSettingsModal(); // re-open refreshed
+  function _buildPresetSelect() {
+    const custom = ChirmTheme.getCustomPresets();
+    const builtinOpts = ChirmTheme.THEME_PRESETS.map(p =>
+      `<option value="${esc(p.name)}">${esc(p.name)}</option>`
+    ).join('');
+    const customOpts = custom.length
+      ? `<optgroup label="Custom">${custom.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('')}</optgroup>`
+      : '';
+    return `<optgroup label="Built-in">${builtinOpts}</optgroup>${customOpts}`;
+  }
+
+  function _buildAppearanceTab() {
+    const userVars = (() => {
+      try { return JSON.parse(localStorage.getItem('chirm_user_theme') || '{}'); } catch { return {}; }
+    })();
+    const serverVars = (() => {
+      try { return JSON.parse(App.publicSettings?.theme_css_vars || '{}'); } catch { return {}; }
+    })();
+
+    const currentValue = (key) => {
+      if (userVars[key]) return userVars[key];
+      if (serverVars[key]) return serverVars[key];
+      return getComputedStyle(document.documentElement).getPropertyValue(key).trim();
+    };
+
+    const groups = ChirmTheme.COLOR_GROUPS.map(g => {
+      const items = g.vars.map(v => {
+        const val = currentValue(v.key);
+        const inputId = `theme-input-${v.key.slice(2)}`;
+        return `<div class="theme-color-item">
+          <input type="color" id="${inputId}" value="${esc(val)}" title="${esc(v.key)}">
+          <label for="${inputId}">${esc(v.label)}</label>
+        </div>`;
+      }).join('');
+      return `<div class="settings-section">
+        <h4 class="settings-section-title">${esc(g.label)}</h4>
+        <div class="theme-color-grid">${items}</div>
+      </div>`;
+    }).join('');
+
+    return `
+      <div class="settings-section" style="margin-bottom:0">
+        <h4 class="settings-section-title">Preset Themes</h4>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <select id="theme-preset-select" style="flex:1;min-width:160px">
+            <option value="">— Select a preset —</option>
+            ${_buildPresetSelect()}
+          </select>
+          <button class="btn btn-sm btn-secondary" id="theme-apply-preset">Apply</button>
+          <button class="btn btn-sm btn-danger" id="theme-delete-preset" title="Delete selected custom preset">🗑</button>
+        </div>
+      </div>
+      ${groups}
+      <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" id="theme-save-btn">Save Appearance</button>
+        <button class="btn btn-secondary" id="theme-reset-btn">Reset to Default</button>
+      </div>
+      <div class="settings-section" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+        <h4 class="settings-section-title">Save as Custom Preset</h4>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="text" id="theme-preset-name" placeholder="My Theme" style="flex:1;min-width:120px">
+          <button class="btn btn-sm btn-secondary" id="theme-save-preset-btn">Save Preset</button>
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Wire notifications tab interactions ─────────────────────────────────────
+
+  function _wireNotifications() {
+    document.getElementById('settings-enable-notifs')?.addEventListener('click', async () => {
+      const result = await ChirmNotifs.requestPermission();
+      if (result === 'granted') {
+        toast('Notifications enabled!', 'success');
+        // Refresh just the notifications pane
+        document.getElementById('us-pane-notifications').innerHTML = _buildNotificationsTab();
+        setTimeout(_wireNotifications, 50);
+      } else {
+        toast('Notification permission denied', 'error');
+      }
+    });
+
+    document.getElementById('settings-test-notif')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      try {
+        const res = await fetch('/api/v1/push/test', { method: 'POST', credentials: 'include' });
+        const data = await res.json();
+        if (data.sent > 0) {
+          toast(`Test notification sent to ${data.sent} device(s)`, 'success');
+        } else if (data.error) {
+          toast(`Push failed: ${data.error}`, 'error');
         } else {
-          toast('Notification permission denied', 'error');
+          toast('No push subscriptions found.', 'info');
         }
-      });
+      } catch (err) {
+        toast('Test failed: ' + err.message, 'error');
+      }
+      btn.disabled = false;
+      btn.textContent = 'Send test';
+    });
 
-      // Test push notification button
-      document.getElementById('settings-test-notif')?.addEventListener('click', async (e) => {
-        const btn = e.currentTarget;
-        btn.disabled = true;
-        btn.textContent = 'Sending…';
+    document.getElementById('settings-disable-pings')?.addEventListener('change', (e) => {
+      setDisablePings(e.target.checked);
+      toast(e.target.checked ? 'Pings muted' : 'Pings enabled', 'info');
+    });
+
+    document.getElementById('settings-in-browser-only')?.addEventListener('change', async (e) => {
+      setInBrowserOnly(e.target.checked);
+      if (typeof ChirmNotifs !== 'undefined') await ChirmNotifs.syncPrefsToSW?.();
+      if (e.target.checked) {
+        if (typeof ChirmNotifs !== 'undefined') await ChirmNotifs.unsubscribePush();
+        toast('OS notifications suppressed — toasts only', 'info');
+      } else {
+        if (typeof ChirmNotifs !== 'undefined') await ChirmNotifs.requestPermission();
+        toast('OS notifications re-enabled', 'info');
+      }
+    });
+
+    document.querySelectorAll('.ch-mute-cb').forEach(cb => {
+      cb.addEventListener('change', (e) => {
+        const chId = e.target.dataset.chId;
+        const nowMuted = toggleMuteChannel(chId);
+        const label = e.target.nextElementSibling;
+        if (label) label.textContent = nowMuted ? 'Muted' : 'Active';
+        if (typeof window.renderChannelList === 'function') window.renderChannelList();
+        toast(nowMuted ? 'Channel muted' : 'Channel unmuted', 'info');
+      });
+    });
+
+    document.getElementById('settings-clear-cache')?.addEventListener('click', () => {
+      ChirmCache.clearAll();
+      toast('Message cache cleared', 'success');
+    });
+  }
+
+  // ── Wire profile tab interactions ────────────────────────────────────────────
+
+  function _wireProfile() {
+    const fileInput = document.getElementById('profile-avatar-file');
+    fileInput?.addEventListener('change', () => {
+      if (!fileInput.files?.length) return;
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const wrap = document.getElementById('avatar-preview-wrap');
+        if (wrap) wrap.innerHTML = `<img src="${e.target.result}" style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:2px solid var(--accent)">`;
+      };
+      reader.readAsDataURL(file);
+      const status = document.getElementById('avatar-upload-status');
+      if (status) status.textContent = `Selected: ${file.name}`;
+    });
+
+    document.getElementById('profile-save-btn')?.addEventListener('click', async () => {
+      const username = document.getElementById('profile-username').value.trim();
+      if (!username) { toast('Username required', 'error'); return; }
+
+      const fileInput = document.getElementById('profile-avatar-file');
+      let avatarUrl = App.user.avatar || '';
+
+      if (fileInput?.files?.length > 0) {
+        const formData = new FormData();
+        formData.append('avatar', fileInput.files[0]);
+        const statusEl = document.getElementById('avatar-upload-status');
+        if (statusEl) statusEl.textContent = 'Uploading avatar…';
         try {
-          const res = await fetch('/api/v1/push/test', { method: 'POST', credentials: 'include' });
-          const data = await res.json();
-          if (data.sent > 0) {
-            toast(`Test notification sent to ${data.sent} device(s)`, 'success');
-          } else if (data.error) {
-            toast(`Push failed: ${data.error}`, 'error');
-            console.error('[Chirm Push test]', data.error);
-          } else {
-            toast('No push subscriptions found. Make sure notifications are enabled on this device.', 'info');
+          const res = await fetch('/api/v1/me/avatar', { method: 'POST', credentials: 'include', body: formData });
+          if (!res.ok) {
+            const d = await res.json();
+            toast(d.error?.message || d.error || 'Avatar upload failed', 'error');
+            return;
           }
-        } catch (err) {
-          toast('Test failed: ' + err.message, 'error');
+          const updated = await res.json();
+          App.user = updated;
+          if (typeof window.renderUserPanel === 'function') window.renderUserPanel();
+          toast('Profile updated', 'success');
+          return;
+        } catch {
+          toast('Avatar upload failed', 'error');
+          return;
         }
-        btn.disabled = false;
-        btn.textContent = 'Send test';
-      });
+      }
 
-      // Disable pings toggle
-      document.getElementById('settings-disable-pings')?.addEventListener('change', (e) => {
-        setDisablePings(e.target.checked);
-        toast(e.target.checked ? 'Pings muted' : 'Pings enabled', 'info');
-      });
+      try {
+        App.user = await api.put('/api/v1/me', { username, avatar: avatarUrl });
+        if (typeof window.renderUserPanel === 'function') window.renderUserPanel();
+        toast('Profile updated', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  }
 
-      // In-browser-only toggle
-      document.getElementById('settings-in-browser-only')?.addEventListener('change', async (e) => {
-        setInBrowserOnly(e.target.checked);
-        // Sync to SW immediately — the SW cannot read localStorage so we must
-        // push the value explicitly. This makes the setting take effect right away
-        // without requiring a page reload, which is critical on mobile.
-        if (typeof ChirmNotifs !== 'undefined') {
-          await ChirmNotifs.syncPrefsToSW();
-        }
-        if (e.target.checked) {
-          // Also remove push subscription server-side as belt-and-suspenders
-          if (typeof ChirmNotifs !== 'undefined') await ChirmNotifs.unsubscribePush();
-          toast('OS notifications suppressed — toasts only', 'info');
-        } else {
-          // Re-subscribe so push notifications flow again
-          if (typeof ChirmNotifs !== 'undefined') await ChirmNotifs.requestPermission();
-          toast('OS notifications re-enabled', 'info');
-        }
-      });
+  // ── Wire appearance tab interactions ─────────────────────────────────────────
 
-      // Per-channel mute checkboxes
-      document.querySelectorAll('.ch-mute-cb').forEach(cb => {
-        cb.addEventListener('change', (e) => {
-          const chId = e.target.dataset.chId;
-          const nowMuted = toggleMuteChannel(chId);
-          const label = e.target.nextElementSibling;
-          if (label) label.textContent = nowMuted ? 'Muted' : 'Active';
-          // Refresh channel list to show mute indicator
-          if (typeof renderChannelList === 'function') renderChannelList();
-          toast(nowMuted ? 'Channel muted' : 'Channel unmuted', 'info');
-        });
-      });
+  function _refreshAppearancePane() {
+    const pane = document.getElementById('us-pane-appearance');
+    if (pane) { pane.innerHTML = _buildAppearanceTab(); setTimeout(_wireAppearance, 50); }
+  }
 
-      // Clear cache button
-      document.getElementById('settings-clear-cache')?.addEventListener('click', () => {
-        ChirmCache.clearAll();
-        toast('Message cache cleared', 'success');
+  function _collectCurrentVars() {
+    const vars = {};
+    for (const key of ChirmTheme.COLOR_VARS) {
+      const el = document.getElementById(`theme-input-${key.slice(2)}`);
+      if (el) vars[key] = el.value;
+    }
+    return vars;
+  }
+
+  function _wireAppearance() {
+    document.getElementById('theme-apply-preset')?.addEventListener('click', () => {
+      const name = document.getElementById('theme-preset-select').value;
+      if (!name) return;
+      const preset = ChirmTheme.getAllPresets().find(p => p.name === name);
+      if (!preset) return;
+      for (const [key, val] of Object.entries(preset.vars)) {
+        const el = document.getElementById(`theme-input-${key.slice(2)}`);
+        if (el) el.value = val;
+      }
+      ChirmTheme.applyVars(preset.vars);
+      ChirmTheme.saveUserTheme(preset.vars);
+    });
+
+    document.getElementById('theme-delete-preset')?.addEventListener('click', () => {
+      const name = document.getElementById('theme-preset-select').value;
+      if (!name) return;
+      const isBuiltin = ChirmTheme.THEME_PRESETS.some(p => p.name === name);
+      if (isBuiltin) { toast('Cannot delete built-in presets', 'error'); return; }
+      ChirmTheme.deleteCustomPreset(name);
+      _refreshAppearancePane();
+      toast(`Preset "${name}" deleted`, 'info');
+    });
+
+    document.getElementById('theme-save-btn')?.addEventListener('click', () => {
+      const vars = _collectCurrentVars();
+      ChirmTheme.saveUserTheme(vars);
+      ChirmTheme.applyVars(vars);
+      toast('Appearance saved', 'success');
+    });
+
+    document.getElementById('theme-reset-btn')?.addEventListener('click', () => {
+      ChirmTheme.resetUserTheme();
+      _refreshAppearancePane();
+      toast('Appearance reset to server default', 'info');
+    });
+
+    document.getElementById('theme-save-preset-btn')?.addEventListener('click', () => {
+      const name = document.getElementById('theme-preset-name').value.trim();
+      if (!name) { toast('Enter a preset name', 'error'); return; }
+      const vars = _collectCurrentVars();
+      ChirmTheme.saveCustomPreset(name, vars);
+      _refreshAppearancePane();
+      toast(`Preset "${name}" saved`, 'success');
+    });
+
+    // Live preview on color input changes
+    document.getElementById('us-pane-appearance')?.querySelectorAll('input[type="color"]').forEach(input => {
+      input.addEventListener('input', (e) => {
+        document.documentElement.style.setProperty(`--${e.target.id.replace('theme-input-', '')}`, e.target.value);
       });
+    });
+  }
+
+  // ── Unified Settings Modal ──────────────────────────────────────────────────
+
+  function openUserSettings(defaultTab = 'profile') {
+    // Remove any existing instance
+    document.getElementById('user-settings-modal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'user-settings-modal';
+    modal.innerHTML = `
+      <div class="modal" style="max-width:520px;width:95%;height:min(680px,85vh);display:flex;flex-direction:column">
+        <div class="modal-header">
+          <h2>⚙ Settings</h2>
+          <button class="modal-close" onclick="document.getElementById('user-settings-modal').remove()">✕</button>
+        </div>
+        <div class="modal-body" style="padding-top:0;overflow-y:auto;flex:1">
+          <div class="admin-tabs" style="position:sticky;top:0;background:var(--bg-elevated);z-index:1;margin-bottom:16px">
+            <button class="admin-tab us-tab${defaultTab === 'profile' ? ' active' : ''}" data-tab="profile"
+              onclick="ChirmSettings.switchUserSettingsTab('profile')">Profile</button>
+            <button class="admin-tab us-tab${defaultTab === 'notifications' ? ' active' : ''}" data-tab="notifications"
+              onclick="ChirmSettings.switchUserSettingsTab('notifications')">Notifications</button>
+            <button class="admin-tab us-tab${defaultTab === 'appearance' ? ' active' : ''}" data-tab="appearance"
+              onclick="ChirmSettings.switchUserSettingsTab('appearance')">Appearance</button>
+          </div>
+          <div id="us-pane-profile" class="us-pane${defaultTab === 'profile' ? ' active' : ''}" style="${defaultTab !== 'profile' ? 'display:none' : ''}">
+            ${_buildProfileTab()}
+          </div>
+          <div id="us-pane-notifications" class="us-pane${defaultTab === 'notifications' ? ' active' : ''}" style="${defaultTab !== 'notifications' ? 'display:none' : ''}">
+            ${_buildNotificationsTab()}
+          </div>
+          <div id="us-pane-appearance" class="us-pane${defaultTab === 'appearance' ? ' active' : ''}" style="${defaultTab !== 'appearance' ? 'display:none' : ''}">
+            ${_buildAppearanceTab()}
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+    setTimeout(() => {
+      _wireProfile();
+      _wireNotifications();
+      _wireAppearance();
     }, 50);
   }
+
+  // switchUserSettingsTab shows/hides panes inside the modal
+  function switchUserSettingsTab(tab) {
+    const modal = document.getElementById('user-settings-modal');
+    if (!modal) return;
+    modal.querySelectorAll('.us-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    modal.querySelectorAll('.us-pane').forEach(p => {
+      const active = p.id === `us-pane-${tab}`;
+      p.classList.toggle('active', active);
+      p.style.display = active ? '' : 'none';
+    });
+  }
+
+  // Keep openSettingsModal as an alias for backwards compatibility
+  const openSettingsModal = () => openUserSettings('notifications');
 
   return {
     get,
@@ -262,7 +535,11 @@ const ChirmSettings = (() => {
     toggleMuteChannel,
     setDisablePings,
     isPingsDisabled,
+    setInBrowserOnly,
+    isInBrowserOnly,
     openSettingsModal,
+    openUserSettings,
+    switchUserSettingsTab,
   };
 })();
 

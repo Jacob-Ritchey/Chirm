@@ -9,6 +9,10 @@ import ChirmSettings from './user-settings.js';
 import ChirmNotifs from './notifications.js';
 import ChirmMentions from './mentions.js';
 import Voice from './voice.js';
+import ChirmTheme from './theme.js';
+
+// Apply user theme immediately (localStorage, synchronous — no flash on load)
+ChirmTheme.loadUserTheme();
 
 // ─── RENDER / UTILITY MODULES ─────────────────────────────────────────────────
 import { toast, avatar, stringToColor, esc, escInline, escAttr, formatTime, formatSize, formatTimeShort, renderContent, isAdmin, resizeInput } from './utils.js';
@@ -32,6 +36,8 @@ import {
   openCreateRole, openEditRole, openAssignRole,
   adminUploadEmojiSelect, adminDoUploadEmoji, adminDeleteEmoji,
   switchAdminTab,
+  renderAdminTheme, saveAdminTheme, clearAdminTheme, applyAdminThemePreset,
+  deleteAdminThemePreset, saveAdminLocalPreset,
 } from './render/admin.js';
 import {
   loadChannels, renderServerHeader, toggleServerInfo, openServerRules,
@@ -62,6 +68,31 @@ async function loadCustomEmojis() {
   App.customEmojis = await api.get('/api/v1/emojis').catch(() => []);
 }
 
+async function loadPublicSettings() {
+  const s = await api.get('/api/v1/public-settings').catch(() => null);
+  if (s) App.publicSettings = s;
+}
+
+// ─── STRUCTURE CACHE — server name/icon + channel list ────────────────────────
+// Persists across page loads so renderServerHeader/renderChannelList can show
+// real content immediately before the API calls finish.
+
+const _STRUCT_KEY = 'chirm_struct';
+
+function _saveStructCache() {
+  try {
+    localStorage.setItem(_STRUCT_KEY, JSON.stringify({
+      s: App.publicSettings,
+      ch: App.channels,
+      cat: App.categories,
+    }));
+  } catch {}
+}
+
+function _loadStructCache() {
+  try { return JSON.parse(localStorage.getItem(_STRUCT_KEY) || 'null'); } catch { return null; }
+}
+
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 async function init() {
   const status = await api.get('/api/v1/setup/status').catch(() => null);
@@ -76,7 +107,14 @@ async function init() {
     return;
   }
 
-  await Promise.all([loadChannels(), loadMembers(), loadRoles(), loadVoiceRooms(), loadCustomEmojis()]);
+  await Promise.all([loadChannels(), loadMembers(), loadRoles(), loadVoiceRooms(), loadCustomEmojis(), loadPublicSettings()]);
+
+  // Persist fresh structural data for next page-load instant render
+  _saveStructCache();
+
+  // Apply server theme, then user overrides (before first paint of UI)
+  ChirmTheme.loadServerTheme(App.publicSettings);
+  ChirmTheme.loadUserTheme();
 
   renderServerHeader();
   renderChannelList();
@@ -488,10 +526,20 @@ const PanelMgr = (() => {
 function closeAllPanels() { PanelMgr.closeAll(); }
 
 function toggleSidebar(forceClose = false) {
-  if (forceClose || PanelMgr.isOpen('channels')) {
-    PanelMgr.close('channels');
+  if (PanelMgr.isMobile()) {
+    if (forceClose || PanelMgr.isOpen('channels')) {
+      PanelMgr.close('channels');
+    } else {
+      PanelMgr.open('channels');
+    }
   } else {
-    if (PanelMgr.isMobile()) PanelMgr.open('channels');
+    const sidebar = document.getElementById('sidebar');
+    if (forceClose) {
+      sidebar.classList.add('desktop-collapsed');
+    } else {
+      sidebar.classList.toggle('desktop-collapsed');
+    }
+    try { localStorage.setItem('chirm_ui_sidebar_hidden', sidebar.classList.contains('desktop-collapsed') ? '1' : '0'); } catch {}
   }
 }
 
@@ -505,6 +553,7 @@ function toggleMembers() {
     }
   } else {
     panel.classList.toggle('collapsed');
+    try { localStorage.setItem('chirm_ui_members', panel.classList.contains('collapsed') ? '1' : '0'); } catch {}
   }
 }
 
@@ -561,7 +610,44 @@ fixViewportHeight();
 document.addEventListener('DOMContentLoaded', fixViewportHeight);
 
 // ─── BOOT ─────────────────────────────────────────────────────────────────────
+
+// Apply stored UI state synchronously before first paint to prevent flash
+function applyStoredUIState() {
+  // Disable transitions so collapsed elements snap to position instead of animating
+  document.documentElement.classList.add('no-transition');
+
+  if (localStorage.getItem('chirm_ui_members') === '1')
+    document.getElementById('members-sidebar')?.classList.add('collapsed');
+
+  if (localStorage.getItem('chirm_ui_server_info') === '1') {
+    const hdr = document.getElementById('server-header');
+    if (hdr) { hdr.classList.remove('server-header-expanded'); hdr.classList.add('server-header-collapsed'); }
+    const chev = document.getElementById('server-chevron');
+    if (chev) chev.textContent = '▸';
+  }
+
+  if (localStorage.getItem('chirm_ui_sidebar_hidden') === '1')
+    document.getElementById('sidebar')?.classList.add('desktop-collapsed');
+
+  // Render server name/icon and channel list from cache so content appears
+  // immediately instead of blank until the API calls in init() complete
+  const _struct = _loadStructCache();
+  if (_struct) {
+    if (_struct.s)   App.publicSettings = _struct.s;
+    if (_struct.ch)  App.channels       = _struct.ch;
+    if (_struct.cat) App.categories     = _struct.cat;
+    renderServerHeader();
+    renderChannelList();
+  }
+
+  // Two rAFs: first commits the layout paint, second re-enables transitions
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    document.documentElement.classList.remove('no-transition');
+  }));
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  applyStoredUIState();
   init();
 
   const input = document.getElementById('message-input');
@@ -601,6 +687,7 @@ window.App            = App;
 window.Voice          = Voice;
 window.ChirmSettings  = ChirmSettings;
 window.ChirmNotifs    = ChirmNotifs;
+window.ChirmTheme     = ChirmTheme;
 
 // Utils
 window.toast          = toast;
@@ -677,3 +764,8 @@ window.adminUploadEmojiSelect = adminUploadEmojiSelect;
 window.adminDoUploadEmoji     = adminDoUploadEmoji;
 window.adminDeleteEmoji       = adminDeleteEmoji;
 window.openCreateRole         = openCreateRole;
+window.saveAdminTheme         = saveAdminTheme;
+window.clearAdminTheme        = clearAdminTheme;
+window.applyAdminThemePreset  = applyAdminThemePreset;
+window.deleteAdminThemePreset = deleteAdminThemePreset;
+window.saveAdminLocalPreset   = saveAdminLocalPreset;

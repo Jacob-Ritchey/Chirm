@@ -1,6 +1,6 @@
 // render/sidebar.js — Channel list, server header, channel/category management
 
-import App from '../state.js';
+import App, { saveServerInfoState, saveCategoriesState } from '../state.js';
 import api from '../api.js';
 import Voice from '../voice.js';
 import ChirmSettings from '../user-settings.js';
@@ -20,32 +20,42 @@ export async function loadChannels() {
 
 // ─── SERVER HEADER ────────────────────────────────────────────────────────────
 
+function _applyServerHeader(s) {
+  const name = s.server_name || 'Chirm';
+  const desc = s.server_description || '';
+  const icon = s.server_icon || '';
+
+  document.getElementById('server-name').textContent = name;
+  document.title = name;
+  const descEl = document.getElementById('server-description');
+  descEl.textContent = desc;
+  descEl.style.display = desc ? '' : 'none';
+
+  const iconWrap = document.getElementById('server-icon-display');
+  if (icon) {
+    iconWrap.innerHTML = `<img src="${esc(icon)}" alt="${esc(name)}">`;
+    iconWrap.className = 'server-icon-img';
+  } else {
+    iconWrap.textContent = name[0]?.toUpperCase() || 'C';
+    iconWrap.className = 'server-icon-letter';
+    iconWrap.style.background = stringToColor(name);
+  }
+}
+
 export function renderServerHeader() {
+  if (App.publicSettings) {
+    _applyServerHeader(App.publicSettings);
+    return;
+  }
   api.get('/api/v1/public-settings').then(s => {
-    const name = s.server_name || 'Chirm';
-    const desc = s.server_description || '';
-    const icon = s.server_icon || '';
-
-    document.getElementById('server-name').textContent = name;
-    document.title = name;
-    const descEl = document.getElementById('server-description');
-    descEl.textContent = desc;
-    descEl.style.display = desc ? '' : 'none';
-
-    const iconWrap = document.getElementById('server-icon-display');
-    if (icon) {
-      iconWrap.innerHTML = `<img src="${esc(icon)}" alt="${esc(name)}">`;
-      iconWrap.className = 'server-icon-img';
-    } else {
-      iconWrap.textContent = name[0]?.toUpperCase() || 'C';
-      iconWrap.className = 'server-icon-letter';
-      iconWrap.style.background = stringToColor(name);
-    }
+    App.publicSettings = s;
+    _applyServerHeader(s);
   }).catch(() => {});
 }
 
 export function toggleServerInfo() {
   App.serverInfoCollapsed = !App.serverInfoCollapsed;
+  saveServerInfoState();
   const header = document.getElementById('server-header');
   const chevron = document.getElementById('server-chevron');
   if (App.serverInfoCollapsed) {
@@ -60,12 +70,14 @@ export function toggleServerInfo() {
 }
 
 export function openServerRules() {
-  api.get('/api/v1/public-settings').then(s => {
+  const show = (s) => {
     const text = (s.agreement_enabled === '1' && s.agreement_text)
       ? s.agreement_text
       : (s.server_description || 'No information set.');
     showSimpleModal('Server Info', `<div style="white-space:pre-wrap;font-size:14px;line-height:1.6;color:var(--text-secondary)">${esc(text)}</div>`, null);
-  });
+  };
+  if (App.publicSettings) { show(App.publicSettings); return; }
+  api.get('/api/v1/public-settings').then(s => { App.publicSettings = s; show(s); }).catch(() => {});
 }
 
 // ─── CHANNEL LIST ─────────────────────────────────────────────────────────────
@@ -297,6 +309,7 @@ export function toggleCategory(catId) {
   } else {
     App.collapsedCategories.add(catId);
   }
+  saveCategoriesState();
   renderChannelList();
 }
 
