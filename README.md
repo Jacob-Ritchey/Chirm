@@ -1,13 +1,14 @@
 <img 
-    style="display: block; 
-           margin-left: auto;
-           margin-right: auto;
-           width: 30%;"
-    src="https://jejunecartoons.com/wp-content/uploads/2026/02/Jenn-Circle.png" 
-    alt="Jenn The Wren">
-</img> 
+style="display: block; 
+margin-left: auto;
+ margin-right: auto;
+ width: 30%;"
+ src="https://jejunecartoons.com/wp-content/uploads/2026/02/Jenn-Circle.png" 
+alt="Jenn The Wren">
+</img>
 
 # Chirm
+[Chirm.org](https://chirm.org)
 
 **Self-hosted community chat.** Real-Time Messaging with voice, video, and screen sharing for your Raspberry Pi, VPS, or home server. Single binary, SQLite database, zero external dependencies.
 
@@ -82,9 +83,17 @@
 
 ## Quick Start
 
-### Build from Source
+**Requirements:** Go 1.22+
 
-**Requirements:** Go 1.21+
+## Docker Setup (Recommended)
+
+```bash
+git clone https://github.com/Jacob-Ritchey/Chirm
+cd Chirm
+docker compose up -d
+```
+
+### Build from Source
 
 ```bash
 #Clone
@@ -103,19 +112,19 @@ go build -o chirm .
 ./chirm
 ```
 
-Open `https://localhost:8443` (accept the self-signed cert via advanced settings) 
+Open `https://localhost:8443` (accept the self-signed cert via advanced settings)
 
 ## Configuration
 
-| Variable         | Default       | Description                                                    |
-| ---------------- | ------------- | -------------------------------------------------------------- |
-| `JWT_SECRET`     | *(required)*  | Secret for signing JWTs — generate with `openssl rand -hex 32` |
-| `PORT`           | `8080`        | HTTP listen port                                               |
-| `HTTPS_PORT`     | `8443`        | HTTPS listen port                                              |
-| `DATA_DIR`       | `./data`      | Directory for SQLite DB and uploads                            |
-| `CHIRM_TLS_CERT` | *(auto)*      | Path to a custom TLS certificate                               |
-| `CHIRM_TLS_KEY`  | *(auto)*      | Path to a custom TLS private key                               |
-| `ALLOWED_ORIGIN` | *(same-host)* | Full origin for WebSocket upgrades behind a reverse proxy      |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `JWT_SECRET` | *(required)* | Secret for signing JWTs — generate with `openssl rand -hex 32` |
+| `PORT` | `8080` | HTTP listen port |
+| `HTTPS_PORT` | `8443` | HTTPS listen port |
+| `DATA_DIR` | `./data` | Directory for SQLite DB and uploads |
+| `CHIRM_TLS_CERT` | *(auto)* | Path to a custom TLS certificate |
+| `CHIRM_TLS_KEY` | *(auto)* | Path to a custom TLS private key |
+| `ALLOWED_ORIGIN` | *(same-host)* | Full origin for WebSocket upgrades behind a reverse proxy |
 
 All configuration is via environment variables or a `.env` file (loaded automatically, never overrides existing env vars).
 
@@ -136,15 +145,15 @@ On first visit you'll be directed to `/setup`, a wizard that:
 
 Permissions use a bitmask stored on roles:
 
-| Permission      | Bit | Description                     |
-| --------------- | --- | ------------------------------- |
-| Read Messages   | 1   | View channels and history       |
-| Send Messages   | 2   | Post messages                   |
-| Manage Messages | 4   | Edit/delete others' messages    |
-| Manage Channels | 8   | Create, edit, delete channels   |
-| Manage Roles    | 16  | Create, edit, assign roles      |
-| Manage Server   | 32  | Change server settings, invites |
-| Administrator   | 64  | All of the above                |
+| Permission | Bit | Description |
+| --- | --- | --- |
+| Read Messages | 1   | View channels and history |
+| Send Messages | 2   | Post messages |
+| Manage Messages | 4   | Edit/delete others' messages |
+| Manage Channels | 8   | Create, edit, delete channels |
+| Manage Roles | 16  | Create, edit, assign roles |
+| Manage Server | 32  | Change server settings, invites |
+| Administrator | 64  | All of the above |
 
 Every user inherits the `@everyone` role. Additional roles stack on top. The server **owner** always has all permissions regardless of assigned roles.
 
@@ -209,109 +218,109 @@ Static files are **embedded in the binary** via Go's `//go:embed` directive. Dep
 
 ### Auth
 
-| Method | Path                   | Description                |
-| ------ | ---------------------- | -------------------------- |
-| `POST` | `/api/setup`           | First-run setup            |
-| `GET`  | `/api/setup/status`    | Check if setup is complete |
-| `POST` | `/api/auth/login`      | Login (rate-limited)       |
-| `POST` | `/api/auth/register`   | Register (rate-limited)    |
-| `POST` | `/api/auth/logout`     | Logout                     |
-| `GET`  | `/api/me`              | Get current user           |
-| `PUT`  | `/api/me`              | Update profile             |
-| `POST` | `/api/me/avatar`       | Upload avatar              |
-| `GET`  | `/api/public-settings` | Get public server settings |
-| `GET`  | `/api/join/{code}`     | Validate invite code       |
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/setup` | First-run setup |
+| `GET` | `/api/setup/status` | Check if setup is complete |
+| `POST` | `/api/auth/login` | Login (rate-limited) |
+| `POST` | `/api/auth/register` | Register (rate-limited) |
+| `POST` | `/api/auth/logout` | Logout |
+| `GET` | `/api/me` | Get current user |
+| `PUT` | `/api/me` | Update profile |
+| `POST` | `/api/me/avatar` | Upload avatar |
+| `GET` | `/api/public-settings` | Get public server settings |
+| `GET` | `/api/join/{code}` | Validate invite code |
 
 ### Channels & Categories
 
-| Method   | Path                              | Auth  |
-| -------- | --------------------------------- | ----- |
-| `GET`    | `/api/channels`                   | Any   |
-| `POST`   | `/api/channels`                   | Admin |
-| `PUT`    | `/api/channels/{id}`              | Admin |
-| `DELETE` | `/api/channels/{id}`              | Admin |
-| `POST`   | `/api/channels/reorder`           | Admin |
-| `GET`    | `/api/channel-categories`         | Any   |
-| `POST`   | `/api/channel-categories`         | Admin |
-| `PUT`    | `/api/channel-categories/{id}`    | Admin |
-| `DELETE` | `/api/channel-categories/{id}`    | Admin |
-| `POST`   | `/api/channel-categories/reorder` | Admin |
+| Method | Path | Auth |
+| --- | --- | --- |
+| `GET` | `/api/channels` | Any |
+| `POST` | `/api/channels` | Admin |
+| `PUT` | `/api/channels/{id}` | Admin |
+| `DELETE` | `/api/channels/{id}` | Admin |
+| `POST` | `/api/channels/reorder` | Admin |
+| `GET` | `/api/channel-categories` | Any |
+| `POST` | `/api/channel-categories` | Admin |
+| `PUT` | `/api/channel-categories/{id}` | Admin |
+| `DELETE` | `/api/channel-categories/{id}` | Admin |
+| `POST` | `/api/channel-categories/reorder` | Admin |
 
 ### Messages & Reactions
 
-| Method   | Path                                   | Auth         |
-| -------- | -------------------------------------- | ------------ |
-| `GET`    | `/api/channels/{id}/messages`          | Any          |
-| `POST`   | `/api/channels/{id}/messages`          | Any          |
-| `PUT`    | `/api/messages/{id}`                   | Author/Admin |
-| `DELETE` | `/api/messages/{id}`                   | Author/Admin |
-| `POST`   | `/api/messages/{id}/reactions`         | Any          |
-| `DELETE` | `/api/messages/{id}/reactions/{emoji}` | Any          |
+| Method | Path | Auth |
+| --- | --- | --- |
+| `GET` | `/api/channels/{id}/messages` | Any |
+| `POST` | `/api/channels/{id}/messages` | Any |
+| `PUT` | `/api/messages/{id}` | Author/Admin |
+| `DELETE` | `/api/messages/{id}` | Author/Admin |
+| `POST` | `/api/messages/{id}/reactions` | Any |
+| `DELETE` | `/api/messages/{id}/reactions/{emoji}` | Any |
 
 ### Custom Emoji
 
-| Method   | Path               | Auth  |
-| -------- | ------------------ | ----- |
-| `GET`    | `/api/emojis`      | Any   |
-| `POST`   | `/api/emojis`      | Any   |
+| Method | Path | Auth |
+| --- | --- | --- |
+| `GET` | `/api/emojis` | Any |
+| `POST` | `/api/emojis` | Any |
 | `DELETE` | `/api/emojis/{id}` | Admin |
 
 ### Users, Roles & Invites
 
-| Method   | Path                             | Auth  |
-| -------- | -------------------------------- | ----- |
-| `GET`    | `/api/users`                     | Admin |
-| `PUT`    | `/api/users/{id}`                | Admin |
-| `DELETE` | `/api/users/{id}`                | Admin |
-| `GET`    | `/api/members`                   | Any   |
-| `GET`    | `/api/roles`                     | Any   |
-| `POST`   | `/api/roles`                     | Admin |
-| `PUT`    | `/api/roles/{id}`                | Admin |
-| `DELETE` | `/api/roles/{id}`                | Admin |
-| `POST`   | `/api/users/{id}/roles/{roleId}` | Admin |
+| Method | Path | Auth |
+| --- | --- | --- |
+| `GET` | `/api/users` | Admin |
+| `PUT` | `/api/users/{id}` | Admin |
+| `DELETE` | `/api/users/{id}` | Admin |
+| `GET` | `/api/members` | Any |
+| `GET` | `/api/roles` | Any |
+| `POST` | `/api/roles` | Admin |
+| `PUT` | `/api/roles/{id}` | Admin |
+| `DELETE` | `/api/roles/{id}` | Admin |
+| `POST` | `/api/users/{id}/roles/{roleId}` | Admin |
 | `DELETE` | `/api/users/{id}/roles/{roleId}` | Admin |
-| `GET`    | `/api/invites`                   | Admin |
-| `POST`   | `/api/invites`                   | Admin |
-| `DELETE` | `/api/invites/{code}`            | Admin |
+| `GET` | `/api/invites` | Admin |
+| `POST` | `/api/invites` | Admin |
+| `DELETE` | `/api/invites/{code}` | Admin |
 
 ### Server Settings
 
-| Method | Path                     | Auth  |
-| ------ | ------------------------ | ----- |
-| `GET`  | `/api/settings`          | Admin |
-| `PUT`  | `/api/settings`          | Admin |
-| `POST` | `/api/settings/icon`     | Admin |
+| Method | Path | Auth |
+| --- | --- | --- |
+| `GET` | `/api/settings` | Admin |
+| `PUT` | `/api/settings` | Admin |
+| `POST` | `/api/settings/icon` | Admin |
 | `POST` | `/api/settings/login-bg` | Admin |
 
 ### Files & Previews
 
-| Method | Path                  | Auth   |
-| ------ | --------------------- | ------ |
-| `POST` | `/api/upload`         | Any    |
-| `GET`  | `/uploads/{filename}` | Public |
-| `GET`  | `/api/link-preview`   | Any    |
+| Method | Path | Auth |
+| --- | --- | --- |
+| `POST` | `/api/upload` | Any |
+| `GET` | `/uploads/{filename}` | Public |
+| `GET` | `/api/link-preview` | Any |
 
 ### Push Notifications
 
-| Method | Path                         | Auth |
-| ------ | ---------------------------- | ---- |
-| `GET`  | `/api/push/vapid-public-key` | Any  |
-| `POST` | `/api/push/subscribe`        | Any  |
-| `POST` | `/api/push/unsubscribe`      | Any  |
-| `GET`  | `/api/push/poll`             | Any  |
-| `POST` | `/api/push/test`             | Any  |
+| Method | Path | Auth |
+| --- | --- | --- |
+| `GET` | `/api/push/vapid-public-key` | Any |
+| `POST` | `/api/push/subscribe` | Any |
+| `POST` | `/api/push/unsubscribe` | Any |
+| `GET` | `/api/push/poll` | Any |
+| `POST` | `/api/push/test` | Any |
 
 ### Voice
 
-| Method | Path               | Auth |
-| ------ | ------------------ | ---- |
-| `GET`  | `/api/voice/rooms` | Any  |
+| Method | Path | Auth |
+| --- | --- | --- |
+| `GET` | `/api/voice/rooms` | Any |
 
 ### TLS
 
-| Method | Path       | Auth   |
-| ------ | ---------- | ------ |
-| `GET`  | `/ca-cert` | Public |
+| Method | Path | Auth |
+| --- | --- | --- |
+| `GET` | `/ca-cert` | Public |
 
 ### WebSocket
 
@@ -368,8 +377,6 @@ To back up, just copy this directory. To restore, replace it.
 ```bash
 # Backup
 cp -r ./data ./data-backup-$(date +%Y%m%d)
-
-
 ```
 
 ## TLS / HTTPS
@@ -380,7 +387,7 @@ Chirm serves HTTPS out of the box. Certificate priority:
 2. **`certs/` directory** — drop `cert.pem` + `key.pem` into `./certs/`
 3. **Built-in CA** *(default)* — auto-generates a persistent local CA on first run, signs a server cert, and serves the CA at `GET /ca-cert` for easy device trust
 
-To trust the built-in CA on a device, visit `http://<server-ip>:8080/ca-cert` and install the downloaded certificate. 
+To trust the built-in CA on a device, visit `http://<server-ip>:8080/ca-cert` and install the downloaded certificate.
 
 Android and iOS will prompt to add it as a trusted CA.
 
@@ -389,9 +396,9 @@ Android and iOS will prompt to add it as a trusted CA.
 ## Production Notes
 
 - Set a strong `JWT_SECRET` — at least 32 random hex characters
-
+  
 - Put Chirm behind a reverse proxy (nginx / Caddy / Traefik) for public-facing HTTPS
-
+  
 - For nginx, proxy both HTTP and WebSocket:
   
   ```nginx
@@ -404,21 +411,22 @@ Android and iOS will prompt to add it as a trusted CA.
       proxy_set_header X-Real-IP $remote_addr;
   }
   ```
+  
 
 ---
 
 ## Tech Stack
 
-| Layer       | Technology                                                                               |
-| ----------- | ---------------------------------------------------------------------------------------- |
-| Language    | Go 1.21                                                                                  |
-| Router      | [chi](https://github.com/go-chi/chi)                                                     |
-| Database    | SQLite via [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) (pure Go, no CGO) |
-| WebSocket   | [gorilla/websocket](https://github.com/gorilla/websocket)                                |
-| Auth        | JWT ([golang-jwt](https://github.com/golang-jwt/jwt)) + bcrypt                           |
-| Voice/Video | WebRTC (browser-native), mesh P2P topology                                               |
-| Push        | Web Push with VAPID (hand-rolled, zero dependencies)                                     |
-| Frontend    | Vanilla HTML/CSS/JS, no build step                                                       |
+| Layer | Technology |
+| --- | --- |
+| Language | Go 1.21 |
+| Router | [chi](https://github.com/go-chi/chi) |
+| Database | SQLite via [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) (pure Go, no CGO) |
+| WebSocket | [gorilla/websocket](https://github.com/gorilla/websocket) |
+| Auth | JWT ([golang-jwt](https://github.com/golang-jwt/jwt)) + bcrypt |
+| Voice/Video | WebRTC (browser-native), mesh P2P topology |
+| Push | Web Push with VAPID (hand-rolled, zero dependencies) |
+| Frontend | Vanilla HTML/CSS/JS, no build step |
 
 ---
 

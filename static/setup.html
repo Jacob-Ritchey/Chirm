@@ -172,8 +172,9 @@
 
 <script>
   async function checkSetup() {
-    const status = await fetch('/api/setup/status').then(r => r.json()).catch(() => null);
-    if (status?.setup_done) window.location.href = '/';
+    const res = await fetch('/api/v1/setup/status').catch(() => null);
+    const body = res ? await res.json().catch(() => null) : null;
+    if (body?.data?.setup_done) window.location.href = '/';
   }
 
   function syncColorPicker(val) {

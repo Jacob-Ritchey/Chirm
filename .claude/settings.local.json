@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build ./...)",
+      "Bash(go mod tidy)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(wc -l \"/home/june/Downloads/Chirm WOrking ON/Chirm-main/static/js/\"*.js)"
+    ]
+  }
+}

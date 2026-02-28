@@ -1,3 +1,5 @@
+import ChirmNotifs from './notifications.js';
+
 // user-settings.js — Chirm User Settings
 // Locally persisted settings (localStorage).
 // Settings schema:
@@ -187,7 +189,7 @@ const ChirmSettings = (() => {
         btn.disabled = true;
         btn.textContent = 'Sending…';
         try {
-          const res = await fetch('/api/push/test', { method: 'POST', credentials: 'include' });
+          const res = await fetch('/api/v1/push/test', { method: 'POST', credentials: 'include' });
           const data = await res.json();
           if (data.sent > 0) {
             toast(`Test notification sent to ${data.sent} device(s)`, 'success');
@@ -263,3 +265,5 @@ const ChirmSettings = (() => {
     openSettingsModal,
   };
 })();
+
+export default ChirmSettings;

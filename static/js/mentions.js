@@ -187,3 +187,5 @@ const ChirmMentions = (() => {
 
   return { init, close, renderMentions };
 })();
+
+export default ChirmMentions;

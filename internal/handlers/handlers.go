@@ -3,29 +3,31 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"os"
+	"strconv"
 
 	"github.com/gorilla/websocket"
 
 	"chirm/internal/auth"
 	"chirm/internal/db"
+	"chirm/internal/events"
+	"chirm/internal/hub"
 	mw "chirm/internal/middleware"
 )
 
 type Handler struct {
-	db      *db.DB
-	auth    *auth.Service
-	hub     *Hub
-	dataDir string
+	db            *db.DB
+	auth          *auth.Service
+	hub           *hub.Hub
+	bus           *events.Bus
+	dataDir       string
+	allowedOrigin string
 }
 
-func New(database *db.DB, authSvc *auth.Service, hub *Hub, dataDir string) *Handler {
-	return &Handler{db: database, auth: authSvc, hub: hub, dataDir: dataDir}
+func New(database *db.DB, authSvc *auth.Service, h *hub.Hub, bus *events.Bus, dataDir, allowedOrigin string) *Handler {
+	return &Handler{db: database, auth: authSvc, hub: h, bus: bus, dataDir: dataDir, allowedOrigin: allowedOrigin}
 }
 
 // makeUpgrader builds a WebSocket upgrader that validates the Origin header.
-// allowedOrigin is e.g. "https://chat.yourdomain.com". If empty, only
-// same-host origins (matching the request Host header) are permitted.
 func makeUpgrader(allowedOrigin string) websocket.Upgrader {
 	return websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -33,13 +35,11 @@ func makeUpgrader(allowedOrigin string) websocket.Upgrader {
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
 			if origin == "" {
-				// Non-browser clients (curl, API tools) send no Origin — allow.
 				return true
 			}
 			if allowedOrigin != "" {
 				return origin == allowedOrigin
 			}
-			// Default: allow same host only (covers both http and https).
 			return origin == "http://"+r.Host || origin == "https://"+r.Host
 		},
 	}
@@ -50,7 +50,7 @@ func makeUpgrader(allowedOrigin string) websocket.Upgrader {
 func respond(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "data": data})
 }
 
 func ok(w http.ResponseWriter, data interface{}) {
@@ -61,8 +61,46 @@ func created(w http.ResponseWriter, data interface{}) {
 	respond(w, http.StatusCreated, data)
 }
 
+// APIError is the structured error envelope returned by all API endpoints.
+type APIError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func httpStatusToCode(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "BAD_REQUEST"
+	case http.StatusUnauthorized:
+		return "UNAUTHORIZED"
+	case http.StatusForbidden:
+		return "FORBIDDEN"
+	case http.StatusNotFound:
+		return "NOT_FOUND"
+	case http.StatusConflict:
+		return "CONFLICT"
+	case http.StatusServiceUnavailable:
+		return "SERVICE_UNAVAILABLE"
+	}
+	return "INTERNAL_ERROR"
+}
+
 func errResp(w http.ResponseWriter, status int, msg string) {
-	respond(w, status, map[string]string{"error": msg})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    false,
+		"error": APIError{Code: httpStatusToCode(status), Message: msg},
+	})
+}
+
+func parsePagination(r *http.Request) (before string, limit int) {
+	before = r.URL.Query().Get("before")
+	limit = 50
+	if l, _ := strconv.Atoi(r.URL.Query().Get("limit")); l > 0 && l <= 100 {
+		limit = l
+	}
+	return
 }
 
 func (h *Handler) currentUser(r *http.Request) (*db.User, error) {
@@ -79,7 +117,7 @@ func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (*db.User
 		errResp(w, http.StatusUnauthorized, "unauthorized")
 		return nil, false
 	}
-	if !h.db.HasPermission(u, db.PermManageServer) {
+	if !u.IsOwner && !h.db.HasPermission(u, db.PermAdministrator) {
 		errResp(w, http.StatusForbidden, "insufficient permissions")
 		return nil, false
 	}
@@ -95,26 +133,20 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upgrader := makeUpgrader(os.Getenv("ALLOWED_ORIGIN"))
+	upgrader := makeUpgrader(h.allowedOrigin)
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 
-	client := &Client{
-		hub:    h.hub,
-		conn:   conn,
-		send:   make(chan []byte, 256),
-		userID: claims.UserID,
-	}
-	h.hub.register <- client
+	client := h.hub.NewClient(conn, claims.UserID)
+	h.hub.Register(client)
 
-	go client.writePump()
-	go client.readPump()
+	go client.WritePump()
+	go client.ReadPump(h.handleWSMessage)
 }
 
 // VoiceRooms returns a snapshot of who is currently in each voice room.
-// Used by clients on page load to populate sidebar participant lists.
 func (h *Handler) VoiceRooms(w http.ResponseWriter, r *http.Request) {
 	snapshot := h.hub.GetVoiceRoomSnapshot()
 	ok(w, map[string]interface{}{"rooms": snapshot})

@@ -1,41 +1,69 @@
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 
+/*
+ * ═══════════════════════════════════════════════════════════════
+ * CHIRM CSS VARIABLE CONTRACT  (public theming API)
+ * ═══════════════════════════════════════════════════════════════
+ * Override any variable below in a <style> tag or external sheet
+ * to create a custom theme.  Variables are grouped by category:
+ *
+ *   BACKGROUNDS  – surface hierarchy (void → elevated)
+ *   ACCENT       – primary interactive colour and its variants
+ *   TEXT         – readable text hierarchy
+ *   SEMANTIC     – success / danger / warning + status dots
+ *   BORDERS      – subtle separators and shadows
+ *   LAYOUT       – sidebar widths (not colour-related)
+ *   SHAPE        – border-radius tokens
+ *
+ * Only the variables in this :root block are guaranteed stable.
+ * Internal selectors may use them but should not introduce new
+ * ad-hoc values — use a token from this list or add one here.
+ * ═══════════════════════════════════════════════════════════════
+ */
 :root {
-  --bg-void: #09090c;
-  --bg-base: #0f1117;
-  --bg-sidebar: #13151e;
-  --bg-surface: #181b26;
-  --bg-elevated: #1e2130;
-  --bg-hover: #242740;
-  --bg-active: #2a2f4a;
-  --bg-input: #0d0f18;
+  /* ── Backgrounds (darkest → lightest) ─────────────────────── */
+  --bg-void: #09090c;       /* page background behind everything  */
+  --bg-base: #0f1117;       /* main chat area background          */
+  --bg-sidebar: #13151e;    /* sidebar panel background           */
+  --bg-surface: #181b26;    /* card / message surface             */
+  --bg-elevated: #1e2130;   /* tooltips, dropdowns, modals        */
+  --bg-hover: #242740;      /* hover state overlay                */
+  --bg-active: #2a2f4a;     /* pressed / selected overlay         */
+  --bg-input: #0d0f18;      /* text inputs and textareas          */
 
-  --accent: #7c6af5;
-  --accent-hover: #9180ff;
-  --accent-dim: rgba(124,106,245,0.18);
-  --accent-text: #a89bf7;
+  /* ── Accent (primary interactive colour) ──────────────────── */
+  --accent: #7c6af5;                    /* buttons, links, highlights     */
+  --accent-hover: #9180ff;              /* hovered accent elements        */
+  --accent-dim: rgba(124,106,245,0.18); /* subtle accent tint / glow      */
+  --accent-text: #a89bf7;               /* accent-coloured text           */
 
-  --text-primary: #e8eaf0;
-  --text-secondary: #9196a8;
-  --text-muted: #5a5f72;
-  --text-link: #7c9ef5;
+  /* ── Text hierarchy ───────────────────────────────────────── */
+  --text-primary: #e8eaf0;   /* body text                          */
+  --text-secondary: #9196a8; /* labels, descriptions, placeholders */
+  --text-muted: #5a5f72;     /* timestamps, hints, disabled        */
+  --text-link: #7c9ef5;      /* hyperlinks                         */
 
-  --success: #3fba7a;
-  --danger: #e05252;
-  --warning: #e0a030;
-  --online: #3fba7a;
-  --idle: #e0a030;
-  --offline: #5a5f72;
+  /* ── Semantic colours ─────────────────────────────────────── */
+  --success: #3fba7a;   /* positive feedback, online dot          */
+  --danger: #e05252;    /* destructive actions, error messages    */
+  --warning: #e0a030;   /* warnings, idle dot                     */
+  --online: #3fba7a;    /* presence: online status dot            */
+  --idle: #e0a030;      /* presence: idle / away status dot       */
+  --offline: #5a5f72;   /* presence: offline status dot           */
 
-  --border: rgba(255,255,255,0.06);
-  --border-strong: rgba(255,255,255,0.10);
-  --shadow: 0 4px 24px rgba(0,0,0,0.5);
+  /* ── Borders & shadow ─────────────────────────────────────── */
+  --border: rgba(255,255,255,0.06);        /* default subtle border       */
+  --border-strong: rgba(255,255,255,0.10); /* emphasized border           */
+  --shadow: 0 4px 24px rgba(0,0,0,0.5);   /* modal / dropdown shadow     */
 
-  --sidebar-w: 240px;
-  --members-w: 220px;
-  --radius: 8px;
-  --radius-sm: 4px;
-  --radius-lg: 12px;
+  /* ── Layout widths (not colour tokens) ────────────────────── */
+  --sidebar-w: 240px;   /* left channel sidebar width             */
+  --members-w: 220px;   /* right members sidebar width            */
+
+  /* ── Shape tokens ─────────────────────────────────────────── */
+  --radius: 8px;        /* default border-radius                  */
+  --radius-sm: 4px;     /* small elements (badges, inputs)        */
+  --radius-lg: 12px;    /* large cards, modals                    */
 
   font-family: 'Outfit', system-ui, sans-serif;
 }
@@ -400,7 +428,7 @@ body { height: 100%; overflow: hidden; background: var(--bg-void); color: var(--
 .emoji-picker {
   position: fixed;
   z-index: 9999;
-  width: 300px;
+  width: 320px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
@@ -421,7 +449,7 @@ body { height: 100%; overflow: hidden; background: var(--bg-void); color: var(--
 .emoji-picker-tabs::-webkit-scrollbar { display: none; }
 .emoji-tab {
   background: none; border: none; cursor: pointer;
-  padding: 5px 9px; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  padding: 5px 5px; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   font-size: 18px; color: var(--text-secondary);
   transition: all 0.1s; white-space: nowrap;
   border-bottom: 2px solid transparent;
@@ -2361,4 +2389,11 @@ pre code { background: none; border: none; padding: 0; }
     min-width: 180px;
     padding: 8px 10px;
   }
+}
+
+.bot-badge {
+    font-size: 10px; font-weight: 700;
+    background: var(--accent); color: white;
+    border-radius: 3px; padding: 1px 4px;
+    vertical-align: middle; margin-left: 4px;
 }

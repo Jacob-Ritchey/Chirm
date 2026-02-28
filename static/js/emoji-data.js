@@ -207,3 +207,5 @@ const EMOJI_SHORTCODES = {
   'recycle': '♻️', 'infinity': '♾️', 'peace': '☮️', 'cross': '✝️',
   'yin_yang': '☯️', 'wheelchair': '♿', 'radioactive': '☢️', 'biohazard': '☣️',
 };
+
+export { EMOJI_CATEGORY_ICONS, EMOJI_DATA, EMOJI_SHORTCODES };

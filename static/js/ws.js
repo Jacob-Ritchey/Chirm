@@ -80,3 +80,5 @@ const WS = (() => {
 
   return { connect, subscribe, sendTyping, send, on, off };
 })();
+
+export default WS;

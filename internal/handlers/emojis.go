@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"chirm/internal/db"
+	"chirm/internal/hub"
 )
 
 // ListCustomEmojis returns all custom emojis (any authenticated user).
@@ -100,7 +101,7 @@ func (h *Handler) UploadCustomEmoji(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.hub.Broadcast(WSEvent{Type: "emoji.new", Data: emoji})
+	h.hub.Broadcast(hub.WSEvent{Type: "emoji.new", Data: emoji})
 	created(w, emoji)
 }
 
@@ -121,6 +122,6 @@ func (h *Handler) DeleteCustomEmoji(w http.ResponseWriter, r *http.Request) {
 	uploadsDir := filepath.Join(h.dataDir, "uploads")
 	os.Remove(filepath.Join(uploadsDir, filename))
 
-	h.hub.Broadcast(WSEvent{Type: "emoji.delete", Data: map[string]string{"id": id}})
+	h.hub.Broadcast(hub.WSEvent{Type: "emoji.delete", Data: map[string]string{"id": id}})
 	ok(w, map[string]string{"message": "deleted"})
 }

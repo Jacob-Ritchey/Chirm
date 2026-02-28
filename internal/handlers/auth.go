@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"chirm/internal/events"
 )
 
 // Fix #11: Only allow safe, unambiguous characters in usernames.
@@ -130,17 +132,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Notify all connected clients so their member sidebars update live.
-	h.hub.Broadcast(WSEvent{
-		Type: "member.new",
-		Data: map[string]interface{}{
-			"id":       u.ID,
-			"username": u.Username,
-			"avatar":   u.Avatar,
-			"is_owner": u.IsOwner,
-			"roles":    []interface{}{},
-		},
-	})
+	h.bus.Publish(events.Event{Type: events.UserJoined, Data: events.UserJoinedData{User: u}})
 
 	setTokenCookie(w, r, token)
 	created(w, map[string]interface{}{"user": u, "token": token})
