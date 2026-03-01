@@ -14,9 +14,10 @@ const (
 	ReactionUpdated EventType = "reaction.updated"
 	ChannelCreated  EventType = "channel.created"
 	ChannelDeleted  EventType = "channel.deleted"
-	UserJoined       EventType = "user.joined"
-	UserLeft         EventType = "user.left"
-	UserStatusChanged EventType = "user.status.changed"
+	UserJoined          EventType = "user.joined"
+	UserLeft            EventType = "user.left"
+	UserStatusChanged   EventType = "user.status.changed"
+	UserProfileChanged  EventType = "user.profile.changed"
 )
 
 // Event is the envelope passed to subscribers.
@@ -71,4 +72,10 @@ type UserLeftData struct {
 type UserStatusChangedData struct {
 	UserID string
 	Status string
+}
+
+type UserProfileChangedData struct {
+	UserID   string
+	Username string
+	Avatar   string
 }

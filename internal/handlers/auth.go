@@ -212,6 +212,12 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, _ := h.db.GetUserByID(u.ID)
+
+	h.bus.Publish(events.Event{
+		Type: events.UserProfileChanged,
+		Data: events.UserProfileChangedData{UserID: updated.ID, Username: updated.Username, Avatar: updated.Avatar},
+	})
+
 	ok(w, updated)
 }
 
@@ -283,6 +289,12 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, _ := h.db.GetUserByID(u.ID)
+
+	h.bus.Publish(events.Event{
+		Type: events.UserProfileChanged,
+		Data: events.UserProfileChangedData{UserID: updated.ID, Username: updated.Username, Avatar: updated.Avatar},
+	})
+
 	ok(w, updated)
 }
 

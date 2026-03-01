@@ -165,8 +165,9 @@
     const me = await fetch('/api/v1/me', { credentials: 'include' }).then(r => r.json()).catch(() => null);
     if (me?.id) { window.location.href = '/'; return; }
 
-    // Load public settings
-    const settings = await fetch('/api/v1/public-settings').then(r => r.json()).catch(() => ({}));
+    // Load public settings (unwrap {ok, data} envelope)
+    const _res = await fetch('/api/v1/public-settings').then(r => r.json()).catch(() => ({}));
+    const settings = _res.data ?? _res;
     _settings = settings;
 
     // Fix 3B: Server name

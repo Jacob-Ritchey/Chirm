@@ -159,6 +159,14 @@ func main() {
 			"status": broadcastStatus,
 		}})
 	})
+	bus.Subscribe(events.UserProfileChanged, func(e events.Event) {
+		d := e.Data.(events.UserProfileChangedData)
+		wsHub.Broadcast(hub.WSEvent{Type: "member.update", Data: map[string]string{
+			"id":       d.UserID,
+			"username": d.Username,
+			"avatar":   d.Avatar,
+		}})
+	})
 
 	r := chi.NewRouter()
 	r.Use(chimw.Logger)

@@ -453,13 +453,12 @@ const ChirmSettings = (() => {
         if (statusEl) statusEl.textContent = 'Uploading banner…';
         try {
           const res = await fetch('/api/v1/me/banner', { method: 'POST', credentials: 'include', body: formData });
+          const body = await res.json();
           if (!res.ok) {
-            const d = await res.json();
-            toast(d.error?.message || 'Banner upload failed', 'error');
+            toast(body.error?.message || 'Banner upload failed', 'error');
             return;
           }
-          const updated = await res.json();
-          App.user = { ...App.user, ...updated };
+          App.user = { ...App.user, ...(body.data ?? body) };
         } catch {
           toast('Banner upload failed', 'error');
           return;
@@ -475,13 +474,13 @@ const ChirmSettings = (() => {
         if (statusEl) statusEl.textContent = 'Uploading avatar…';
         try {
           const res = await fetch('/api/v1/me/avatar', { method: 'POST', credentials: 'include', body: formData });
+          const body = await res.json();
           if (!res.ok) {
-            const d = await res.json();
-            toast(d.error?.message || 'Avatar upload failed', 'error');
+            toast(body.error?.message || 'Avatar upload failed', 'error');
             return;
           }
-          const updated = await res.json();
-          App.user = { ...App.user, ...updated };
+          const updatedUser = body.data ?? body;
+          App.user = { ...App.user, ...updatedUser };
           avatarUrl = App.user.avatar;
         } catch {
           toast('Avatar upload failed', 'error');

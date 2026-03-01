@@ -2444,7 +2444,7 @@ pre code { background: none; border: none; padding: 0; }
 }
 
 /* ── Status dot — DND ────────────────────────────────────── */
-.status-dot.dnd { background: var(--danger, #ed4245); }
+.status-dot.dnd { background: var(--danger); }
 
 /* ── Status picker popup ─────────────────────────────────── */
 .status-picker {

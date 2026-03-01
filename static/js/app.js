@@ -85,6 +85,7 @@ function _saveStructCache() {
       s: App.publicSettings,
       ch: App.channels,
       cat: App.categories,
+      mb: App.members,
     }));
   } catch {}
 }
@@ -107,10 +108,9 @@ async function init() {
     return;
   }
 
-  await Promise.all([loadChannels(), loadMembers(), loadRoles(), loadVoiceRooms(), loadCustomEmojis(), loadPublicSettings()]);
-
-  // Persist fresh structural data for next page-load instant render
-  _saveStructCache();
+  // Phase 1 — essential: channels + public settings. This is all we need to
+  // render the sidebar and open the last channel with cached messages.
+  await Promise.all([loadChannels(), loadPublicSettings()]);
 
   // Apply server theme, then user overrides (before first paint of UI)
   ChirmTheme.loadServerTheme(App.publicSettings);
@@ -119,7 +119,6 @@ async function init() {
   renderServerHeader();
   renderChannelList();
   renderUserPanel();
-  renderMembersList();
 
   WS.connect();
   setupWSHandlers();
@@ -139,6 +138,15 @@ async function init() {
   if (isAdmin(App.user)) {
     document.getElementById('admin-btn').style.display = 'block';
   }
+
+  // Phase 2 — non-essential: load members, roles, emojis, voice in background.
+  // Members list may already be populated from the struct cache; this refreshes it.
+  Promise.all([loadMembers(), loadRoles(), loadVoiceRooms(), loadCustomEmojis()])
+    .then(() => {
+      renderMembersList();
+      _saveStructCache();
+    })
+    .catch(() => {});
 
   setTimeout(async () => {
     if (Notification.permission === 'default') {
@@ -435,6 +443,20 @@ function setupWSHandlers() {
     if (App.user?.id === id) { App.user.status = status; renderUserPanel(); }
   });
 
+  WS.on('member.update', ({ id, username, avatar }) => {
+    const m = App.members.find(m => m.id === id);
+    if (m) {
+      if (username) m.username = username;
+      if (avatar !== undefined) m.avatar = avatar;
+      renderMembersList();
+    }
+    if (App.user?.id === id) {
+      if (username) App.user.username = username;
+      if (avatar !== undefined) App.user.avatar = avatar;
+      renderUserPanel();
+    }
+  });
+
   WS.on('typing', ({ user_id, channel_id }) => {
     if (user_id === App.user.id) return;
     if (!App.typingUsers[channel_id]) App.typingUsers[channel_id] = {};
@@ -644,8 +666,10 @@ function applyStoredUIState() {
     if (_struct.s)   App.publicSettings = _struct.s;
     if (_struct.ch)  App.channels       = _struct.ch;
     if (_struct.cat) App.categories     = _struct.cat;
+    if (_struct.mb)  App.members        = _struct.mb;
     renderServerHeader();
     renderChannelList();
+    if (_struct.mb?.length) renderMembersList();
   }
 
   // Two rAFs: first commits the layout paint, second re-enables transitions

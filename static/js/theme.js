@@ -41,6 +41,16 @@ export const COLOR_GROUPS = [
       { key: '--warning', label: 'Warning / Idle' },
     ],
   },
+  {
+    label: 'Interactive',
+    vars: [
+      { key: '--bg-hover',      label: 'Hover overlay' },
+      { key: '--bg-active',     label: 'Active / selected overlay' },
+      { key: '--accent-dim',    label: 'Accent tint (glow / highlight)' },
+      { key: '--border',        label: 'Subtle border' },
+      { key: '--border-strong', label: 'Emphasized border' },
+    ],
+  },
 ];
 
 export const COLOR_VARS = COLOR_GROUPS.flatMap(g => g.vars.map(v => v.key));
@@ -56,6 +66,9 @@ export const THEME_PRESETS = [
       '--text-primary': '#e8eaf0', '--text-secondary': '#9196a8',
       '--text-muted': '#5a5f72', '--text-link': '#7c9ef5',
       '--success': '#3fba7a', '--danger': '#e05252', '--warning': '#e0a030',
+      '--bg-hover': '#242740', '--bg-active': '#2a2f4a',
+      '--accent-dim': 'rgba(124,106,245,0.18)',
+      '--border': 'rgba(255,255,255,0.06)', '--border-strong': 'rgba(255,255,255,0.10)',
     },
   },
   {
@@ -68,6 +81,9 @@ export const THEME_PRESETS = [
       '--text-primary': '#dde4f0', '--text-secondary': '#8898b8',
       '--text-muted': '#4a5570', '--text-link': '#5c9ef5',
       '--success': '#3ab873', '--danger': '#e04848', '--warning': '#d99020',
+      '--bg-hover': '#172038', '--bg-active': '#1d2840',
+      '--accent-dim': 'rgba(74,128,240,0.18)',
+      '--border': 'rgba(255,255,255,0.06)', '--border-strong': 'rgba(255,255,255,0.10)',
     },
   },
   {
@@ -80,6 +96,9 @@ export const THEME_PRESETS = [
       '--text-primary': '#ddeee6', '--text-secondary': '#7aaa90',
       '--text-muted': '#456050', '--text-link': '#50d090',
       '--success': '#30c870', '--danger': '#e05050', '--warning': '#d99020',
+      '--bg-hover': '#14201a', '--bg-active': '#182620',
+      '--accent-dim': 'rgba(46,194,122,0.18)',
+      '--border': 'rgba(255,255,255,0.06)', '--border-strong': 'rgba(255,255,255,0.10)',
     },
   },
   {
@@ -92,6 +111,24 @@ export const THEME_PRESETS = [
       '--text-primary': '#ece8e4', '--text-secondary': '#a09890',
       '--text-muted': '#605850', '--text-link': '#c09050',
       '--success': '#4ab870', '--danger': '#e05050', '--warning': '#d9a020',
+      '--bg-hover': '#221f1b', '--bg-active': '#282320',
+      '--accent-dim': 'rgba(224,120,69,0.18)',
+      '--border': 'rgba(255,255,255,0.06)', '--border-strong': 'rgba(255,255,255,0.10)',
+    },
+  },
+  {
+    name: 'Proto',
+    vars: {
+      '--bg-void': '#080808', '--bg-base': '#0f0f0f', '--bg-sidebar': '#131313',
+      '--bg-surface': '#191919', '--bg-elevated': '#202020',
+      '--bg-input': '#0a0a0a',
+      '--accent': '#e03232', '--accent-hover': '#f04040', '--accent-text': '#ff6868',
+      '--text-primary': '#f0f0f0', '--text-secondary': '#888888',
+      '--text-muted': '#545454', '--text-link': '#ff7070',
+      '--success': '#3fba7a', '--danger': '#e05252', '--warning': '#e0a030',
+      '--bg-hover': '#1e0d0d', '--bg-active': '#260e0e',
+      '--accent-dim': 'rgba(224,50,50,0.18)',
+      '--border': 'rgba(255,255,255,0.07)', '--border-strong': 'rgba(255,255,255,0.12)',
     },
   },
 ];
