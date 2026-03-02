@@ -9,6 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"chirm/internal/db"
+	"chirm/internal/events"
+	mw "chirm/internal/middleware"
 )
 
 func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
@@ -19,13 +21,12 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
 		limit = l
 	}
 
-	// Verify channel exists
 	if _, err := h.db.GetChannelByID(channelID); err != nil {
 		errResp(w, http.StatusNotFound, "channel not found")
 		return
 	}
 
-	msgs, err := h.db.GetMessages(channelID, before, limit)
+	msgs, err := h.db.GetMessages(channelID, before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to get messages")
 		return
@@ -33,17 +34,29 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
 	if msgs == nil {
 		msgs = []db.Message{}
 	}
-	ok(w, msgs)
+	hasMore := len(msgs) > limit
+	if hasMore {
+		msgs = msgs[:limit]
+	}
+	ok(w, map[string]interface{}{"messages": msgs, "has_more": hasMore})
 }
 
 func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
-	u, err := h.currentUser(r)
-	if err != nil || u == nil {
+	// Determine identity: user or bot
+	u, _ := h.currentUser(r)
+	botClaims := mw.GetBotClaims(r)
+
+	if u == nil && botClaims == nil {
 		errResp(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	if !h.db.HasPermission(u, db.PermSendMessages) {
+	// Check PermSendMessages
+	if u != nil && !h.db.HasPermission(u, db.PermSendMessages) {
+		errResp(w, http.StatusForbidden, "no permission to send messages")
+		return
+	}
+	if botClaims != nil && botClaims.Permissions&db.PermSendMessages == 0 {
 		errResp(w, http.StatusForbidden, "no permission to send messages")
 		return
 	}
@@ -56,7 +69,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Content     string   `json:"content"`
-		Attachments []string `json:"attachments"` // attachment IDs
+		Attachments []string `json:"attachments"`
 		ReplyToID   *string  `json:"reply_to_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -74,30 +87,39 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg, err := h.db.CreateMessage(channelID, u.ID, req.Content, req.ReplyToID)
+	var msg *db.Message
+	var err error
+	var authorID, authorName string
+
+	if u != nil {
+		msg, err = h.db.CreateMessage(channelID, u.ID, req.Content, req.ReplyToID)
+		authorID = u.ID
+		if msg != nil && msg.Author != nil {
+			authorName = msg.Author.Username
+		} else {
+			authorName = "Someone"
+		}
+	} else {
+		msg, err = h.db.CreateMessageFromBot(channelID, botClaims.BotID, req.Content, req.ReplyToID)
+		authorID = "bot:" + botClaims.BotID
+		authorName = botClaims.BotName
+	}
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to send message")
 		return
 	}
 
-	// Link any pre-uploaded attachments to this message
 	for _, attID := range req.Attachments {
 		if attID != "" {
 			h.db.LinkAttachment(attID, msg.ID)
 		}
 	}
-
-	// Re-fetch so the response includes attachment data
 	if len(req.Attachments) > 0 {
 		if full, err := h.db.GetMessageByID(msg.ID); err == nil {
 			msg = full
 		}
 	}
 
-	// Broadcast to all channel subscribers (message.new is channel-scoped)
-	h.hub.BroadcastToChannel(channelID, WSEvent{Type: "message.new", Data: msg})
-
-	// Resolve channel name and author for notifications
 	chObj, _ := h.db.GetChannelByID(channelID)
 	chName := channelID
 	if chObj != nil {
@@ -107,30 +129,17 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	if len(contentPreview) > 120 {
 		contentPreview = contentPreview[:120] + "…"
 	}
-	authorName := "Someone"
-	if msg.Author != nil {
-		authorName = msg.Author.Username
-	}
-	authorID := msg.UserID
 
-	// Broadcast globally so ALL clients can update unread dots AND show in-app
-	// notifications — message.new only reaches the subscribed channel's clients.
-	h.hub.Broadcast(WSEvent{Type: "message.activity", Data: map[string]interface{}{
-		"channel_id":   channelID,
-		"channel_name": chName,
-		"author_id":    authorID,
-		"author":       authorName,
-		"preview":      contentPreview,
-		"message_id":   msg.ID,
-	}})
-
-	// Send Web Push notifications (background, non-blocking)
-	h.BroadcastPush(chName, u.ID, PushPayload{
-		Title:     authorName + " in #" + chName,
-		Body:      contentPreview,
-		ChannelID: channelID,
-		MessageID: msg.ID,
-		Tag:       "chirm-" + channelID,
+	h.bus.Publish(events.Event{
+		Type: events.MessageCreated,
+		Data: events.MessageCreatedData{
+			Message:        msg,
+			ChannelID:      channelID,
+			ChannelName:    chName,
+			AuthorID:       authorID,
+			AuthorName:     authorName,
+			ContentPreview: contentPreview,
+		},
 	})
 
 	created(w, msg)
@@ -164,13 +173,19 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reactions, _ := h.db.GetReactions(msgID)
-	payload := map[string]interface{}{
+	h.bus.Publish(events.Event{
+		Type: events.ReactionUpdated,
+		Data: events.ReactionUpdatedData{
+			MessageID: msgID,
+			ChannelID: msg.ChannelID,
+			Reactions: reactions,
+		},
+	})
+	ok(w, map[string]interface{}{
 		"message_id": msgID,
 		"channel_id": msg.ChannelID,
 		"reactions":  reactions,
-	}
-	h.hub.BroadcastToChannel(msg.ChannelID, WSEvent{Type: "reaction.update", Data: payload})
-	ok(w, payload)
+	})
 }
 
 func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +196,14 @@ func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msgID := chi.URLParam(r, "id")
-	emoji := chi.URLParam(r, "emoji")
+	var req struct {
+		Emoji string `json:"emoji"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Emoji == "" {
+		errResp(w, http.StatusBadRequest, "emoji required")
+		return
+	}
+	emoji := req.Emoji
 
 	msg, err := h.db.GetMessageByID(msgID)
 	if err != nil {
@@ -195,13 +217,19 @@ func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reactions, _ := h.db.GetReactions(msgID)
-	payload := map[string]interface{}{
+	h.bus.Publish(events.Event{
+		Type: events.ReactionUpdated,
+		Data: events.ReactionUpdatedData{
+			MessageID: msgID,
+			ChannelID: msg.ChannelID,
+			Reactions: reactions,
+		},
+	})
+	ok(w, map[string]interface{}{
 		"message_id": msgID,
 		"channel_id": msg.ChannelID,
 		"reactions":  reactions,
-	}
-	h.hub.BroadcastToChannel(msg.ChannelID, WSEvent{Type: "reaction.update", Data: payload})
-	ok(w, payload)
+	})
 }
 
 func (h *Handler) EditMessage(w http.ResponseWriter, r *http.Request) {
@@ -218,7 +246,6 @@ func (h *Handler) EditMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Author or admin can edit
 	if msg.UserID != u.ID && !h.db.HasPermission(u, db.PermManageMessages) {
 		errResp(w, http.StatusForbidden, "cannot edit this message")
 		return
@@ -244,7 +271,13 @@ func (h *Handler) EditMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, _ := h.db.GetMessageByID(id)
-	h.hub.BroadcastToChannel(msg.ChannelID, WSEvent{Type: "message.edit", Data: updated})
+	h.bus.Publish(events.Event{
+		Type: events.MessageEdited,
+		Data: events.MessageEditedData{
+			Message:   updated,
+			ChannelID: msg.ChannelID,
+		},
+	})
 	ok(w, updated)
 }
 
@@ -273,6 +306,12 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.hub.BroadcastToChannel(channelID, WSEvent{Type: "message.delete", Data: map[string]string{"id": id, "channel_id": channelID}})
+	h.bus.Publish(events.Event{
+		Type: events.MessageDeleted,
+		Data: events.MessageDeletedData{
+			MessageID: id,
+			ChannelID: channelID,
+		},
+	})
 	ok(w, map[string]string{"message": "deleted"})
 }

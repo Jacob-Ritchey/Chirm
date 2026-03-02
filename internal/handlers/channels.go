@@ -8,18 +8,25 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"chirm/internal/db"
+	"chirm/internal/events"
+	"chirm/internal/hub"
 )
 
 func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
-	channels, err := h.db.ListChannels()
+	before, limit := parsePagination(r)
+	items, err := h.db.ListChannelsPaginated(before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list channels")
 		return
 	}
-	if channels == nil {
-		channels = []db.Channel{}
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
 	}
-	ok(w, channels)
+	if items == nil {
+		items = []db.Channel{}
+	}
+	ok(w, map[string]interface{}{"items": items, "has_more": hasMore})
 }
 
 func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +62,7 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.hub.Broadcast(WSEvent{Type: "channel.new", Data: channel})
+	h.bus.Publish(events.Event{Type: events.ChannelCreated, Data: events.ChannelCreatedData{Channel: channel}})
 	created(w, channel)
 }
 
@@ -83,7 +90,7 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channel, _ := h.db.GetChannelByID(id)
-	h.hub.Broadcast(WSEvent{Type: "channel.update", Data: channel})
+	h.hub.Broadcast(hub.WSEvent{Type: "channel.update", Data: channel})
 	ok(w, channel)
 }
 
@@ -99,7 +106,7 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.hub.Broadcast(WSEvent{Type: "channel.delete", Data: map[string]string{"id": id}})
+	h.bus.Publish(events.Event{Type: events.ChannelDeleted, Data: events.ChannelDeletedData{ChannelID: id}})
 	ok(w, map[string]string{"message": "deleted"})
 }
 
@@ -139,7 +146,7 @@ func (h *Handler) ReorderChannels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channels, _ := h.db.ListChannels()
-	h.hub.Broadcast(WSEvent{Type: "channels.reorder", Data: channels})
+	h.hub.Broadcast(hub.WSEvent{Type: "channels.reorder", Data: channels})
 	ok(w, map[string]string{"message": "reordered"})
 }
 
@@ -179,7 +186,7 @@ func (h *Handler) CreateCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.hub.Broadcast(WSEvent{Type: "category.new", Data: cat})
+	h.hub.Broadcast(hub.WSEvent{Type: "category.new", Data: cat})
 	created(w, cat)
 }
 
@@ -204,7 +211,7 @@ func (h *Handler) UpdateCategory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cats, _ := h.db.ListCategories()
-	h.hub.Broadcast(WSEvent{Type: "categories.update", Data: cats})
+	h.hub.Broadcast(hub.WSEvent{Type: "categories.update", Data: cats})
 	ok(w, map[string]string{"message": "updated"})
 }
 
@@ -234,7 +241,7 @@ func (h *Handler) ReorderCategories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cats, _ := h.db.ListCategories()
-	h.hub.Broadcast(WSEvent{Type: "categories.update", Data: cats})
+	h.hub.Broadcast(hub.WSEvent{Type: "categories.update", Data: cats})
 	ok(w, map[string]string{"message": "reordered"})
 }
 
@@ -251,6 +258,6 @@ func (h *Handler) DeleteCategory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channels, _ := h.db.ListChannels()
-	h.hub.Broadcast(WSEvent{Type: "category.delete", Data: map[string]interface{}{"id": id, "channels": channels}})
+	h.hub.Broadcast(hub.WSEvent{Type: "category.delete", Data: map[string]interface{}{"id": id, "channels": channels}})
 	ok(w, map[string]string{"message": "deleted"})
 }

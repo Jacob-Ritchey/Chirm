@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -17,9 +17,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
-	"strings"
-	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -28,149 +28,156 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"chirm/internal/auth"
+	"chirm/internal/config"
 	"chirm/internal/db"
+	"chirm/internal/events"
 	"chirm/internal/handlers"
+	"chirm/internal/hub"
 	mw "chirm/internal/middleware"
+	"chirm/internal/plugin"
+	"chirm/internal/router"
 )
 
 //go:embed static
 var staticFiles embed.FS
 
 func main() {
-	// Load .env file if present (does not override existing env vars).
-	loadDotenv(".env")
-
-	port := getEnv("PORT", "8080")
-	dataDir := getEnv("DATA_DIR", "./data")
-
-	// Refuse to start with a missing or default JWT secret.
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" ||
-		jwtSecret == "change-this-secret-in-production" ||
-		jwtSecret == "change-me-use-a-long-random-string-here" ||
-		jwtSecret == "change-me-use-a-long-random-string" {
-		log.Fatal("FATAL: JWT_SECRET is not set or is using the insecure default value.\n" +
-			"Generate one with:  openssl rand -hex 32\n" +
-			"Then set it in your environment or .env file before starting Chirm.")
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal("FATAL: ", err)
 	}
 
-	if err := os.MkdirAll(dataDir+"/uploads", 0755); err != nil {
+	if err := os.MkdirAll(cfg.DataDir+"/uploads", 0755); err != nil {
 		log.Fatal("Failed to create data directory:", err)
 	}
 
-	database, err := db.Init(dataDir + "/chirm.db")
+	database, err := db.Init(cfg.DataDir + "/chirm.db")
 	if err != nil {
 		log.Fatal("Failed to init database:", err)
 	}
 	defer database.Close()
 
-	authSvc := auth.New(jwtSecret)
-	hub := handlers.NewHub(getEnv("ALLOWED_ORIGIN", ""))
-	go hub.Run()
+	authSvc := auth.New(cfg.JWTSecret)
+	wsHub := hub.New(cfg.AllowedOrigin)
+	go wsHub.Run()
+
+	bus := events.New()
 
 	// Fix #9: Periodically clean up orphaned attachments (uploaded but never sent).
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
-			if err := database.CleanOrphanedAttachments(dataDir+"/uploads", 1*time.Hour); err != nil {
+			if err := database.CleanOrphanedAttachments(cfg.DataDir+"/uploads", 1*time.Hour); err != nil {
 				log.Printf("attachment cleanup error: %v", err)
 			}
 		}
 	}()
 
-	h := handlers.New(database, authSvc, hub, dataDir)
+	h := handlers.New(database, authSvc, wsHub, bus, cfg.DataDir, cfg.AllowedOrigin)
 
 	// Initialise VAPID keys for Web Push notifications (non-fatal if it fails)
 	if err := h.InitVAPID(); err != nil {
 		log.Printf("⚠ VAPID init error (push notifications disabled): %v", err)
 	}
 
+	// Plugin registry — add plugins here before starting the server.
+	pluginRegistry := plugin.NewRegistry()
+	// Example: pluginRegistry.Register(myplugin.New())
+	pluginList := pluginRegistry.All()
+
+	// Wire domain events → WebSocket broadcasts and push notifications.
+	bus.Subscribe(events.MessageCreated, func(e events.Event) {
+		d := e.Data.(events.MessageCreatedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "message.new", Data: d.Message})
+		wsHub.Broadcast(hub.WSEvent{Type: "message.activity", Data: map[string]interface{}{
+			"channel_id":   d.ChannelID,
+			"channel_name": d.ChannelName,
+			"author_id":    d.AuthorID,
+			"author":       d.AuthorName,
+			"preview":      d.ContentPreview,
+			"message_id":   d.Message.ID,
+		}})
+	})
+	bus.Subscribe(events.MessageCreated, func(e events.Event) {
+		d := e.Data.(events.MessageCreatedData)
+		h.BroadcastPush(d.AuthorID, handlers.PushPayload{
+			Title:     d.AuthorName + " in #" + d.ChannelName,
+			Body:      d.ContentPreview,
+			ChannelID: d.ChannelID,
+			MessageID: d.Message.ID,
+			Tag:       "chirm-" + d.ChannelID,
+		})
+	})
+	bus.Subscribe(events.MessageEdited, func(e events.Event) {
+		d := e.Data.(events.MessageEditedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "message.edit", Data: d.Message})
+	})
+	bus.Subscribe(events.MessageDeleted, func(e events.Event) {
+		d := e.Data.(events.MessageDeletedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "message.delete", Data: map[string]string{
+			"id":         d.MessageID,
+			"channel_id": d.ChannelID,
+		}})
+	})
+	bus.Subscribe(events.ReactionUpdated, func(e events.Event) {
+		d := e.Data.(events.ReactionUpdatedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "reaction.update", Data: map[string]interface{}{
+			"message_id": d.MessageID,
+			"channel_id": d.ChannelID,
+			"reactions":  d.Reactions,
+		}})
+	})
+	bus.Subscribe(events.ChannelCreated, func(e events.Event) {
+		d := e.Data.(events.ChannelCreatedData)
+		wsHub.Broadcast(hub.WSEvent{Type: "channel.new", Data: d.Channel})
+	})
+	bus.Subscribe(events.ChannelDeleted, func(e events.Event) {
+		d := e.Data.(events.ChannelDeletedData)
+		wsHub.Broadcast(hub.WSEvent{Type: "channel.delete", Data: map[string]string{"id": d.ChannelID}})
+	})
+	bus.Subscribe(events.UserJoined, func(e events.Event) {
+		d := e.Data.(events.UserJoinedData)
+		u := d.User
+		if u.Status == "invisible" {
+			u.Status = "offline"
+		}
+		wsHub.Broadcast(hub.WSEvent{Type: "member.new", Data: u})
+	})
+	bus.Subscribe(events.UserLeft, func(e events.Event) {
+		d := e.Data.(events.UserLeftData)
+		wsHub.Broadcast(hub.WSEvent{Type: "member.leave", Data: map[string]string{"id": d.UserID}})
+	})
+	bus.Subscribe(events.UserStatusChanged, func(e events.Event) {
+		d := e.Data.(events.UserStatusChangedData)
+		broadcastStatus := d.Status
+		if broadcastStatus == "invisible" {
+			broadcastStatus = "offline"
+		}
+		wsHub.Broadcast(hub.WSEvent{Type: "member.status", Data: map[string]string{
+			"id":     d.UserID,
+			"status": broadcastStatus,
+		}})
+	})
+	bus.Subscribe(events.UserProfileChanged, func(e events.Event) {
+		d := e.Data.(events.UserProfileChangedData)
+		wsHub.Broadcast(hub.WSEvent{Type: "member.update", Data: map[string]string{
+			"id":       d.UserID,
+			"username": d.Username,
+			"avatar":   d.Avatar,
+		}})
+	})
+
 	r := chi.NewRouter()
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.CleanPath)
 
-	// Fix #3: Per-IP rate limiter for auth endpoints (10 req/min, burst 5).
-	authLimiter := newIPRateLimiter(rate.Every(time.Minute/10), 5)
+	// Per-IP rate limiter for auth endpoints (10 req/min, burst 5).
+	authLimiter := mw.NewIPRateLimiter(rate.Every(time.Minute/10), 5)
 
-	// Public API
-	r.Get("/api/setup/status", h.SetupStatus)
-	r.Post("/api/setup", h.Setup)
-	r.With(authLimiter).Post("/api/auth/login", h.Login)
-	r.With(authLimiter).Post("/api/auth/register", h.Register)
-	r.Post("/api/auth/logout", h.Logout)
-	r.Get("/api/join/{code}", h.JoinWithInvite)
-	r.Get("/api/public-settings", h.GetPublicSettings)
-
-	// Authenticated API
-	r.Group(func(r chi.Router) {
-		r.Use(mw.Auth(authSvc))
-
-		r.Get("/ws", h.WebSocket)
-
-		r.Get("/api/me", h.GetMe)
-		r.Put("/api/me", h.UpdateMe)
-		r.Post("/api/me/avatar", h.UploadAvatar)
-
-		r.Get("/api/channels", h.ListChannels)
-		r.Post("/api/channels", h.CreateChannel)
-		r.Put("/api/channels/{id}", h.UpdateChannel)
-		r.Delete("/api/channels/{id}", h.DeleteChannel)
-		r.Post("/api/channels/reorder", h.ReorderChannels)
-
-		r.Get("/api/channel-categories", h.ListCategories)
-		r.Post("/api/channel-categories", h.CreateCategory)
-		r.Post("/api/channel-categories/reorder", h.ReorderCategories)
-		r.Put("/api/channel-categories/{id}", h.UpdateCategory)
-		r.Delete("/api/channel-categories/{id}", h.DeleteCategory)
-
-		r.Get("/api/channels/{id}/messages", h.GetMessages)
-		r.Post("/api/channels/{id}/messages", h.SendMessage)
-		r.Put("/api/messages/{id}", h.EditMessage)
-		r.Delete("/api/messages/{id}", h.DeleteMessage)
-		r.Post("/api/messages/{id}/reactions", h.AddReaction)
-		r.Delete("/api/messages/{id}/reactions/{emoji}", h.RemoveReaction)
-
-		r.Get("/api/emojis", h.ListCustomEmojis)
-		r.Post("/api/emojis", h.UploadCustomEmoji)
-		r.Delete("/api/emojis/{id}", h.DeleteCustomEmoji)
-
-		r.Get("/api/link-preview", h.LinkPreview)
-
-		r.Post("/api/upload", h.Upload)
-
-		r.Get("/api/users", h.ListUsers)
-		r.Put("/api/users/{id}", h.UpdateUser)
-		r.Delete("/api/users/{id}", h.DeleteUser)
-
-		r.Get("/api/roles", h.ListRoles)
-		r.Post("/api/roles", h.CreateRole)
-		r.Put("/api/roles/{id}", h.UpdateRole)
-		r.Delete("/api/roles/{id}", h.DeleteRole)
-		r.Post("/api/users/{id}/roles/{roleId}", h.AssignRole)
-		r.Delete("/api/users/{id}/roles/{roleId}", h.RemoveRole)
-
-		r.Get("/api/invites", h.ListInvites)
-		r.Post("/api/invites", h.CreateInvite)
-		r.Delete("/api/invites/{code}", h.DeleteInvite)
-
-		r.Get("/api/settings", h.GetSettings)
-		r.Put("/api/settings", h.UpdateSettings)
-		r.Post("/api/settings/icon", h.UploadServerIcon)
-		r.Post("/api/settings/login-bg", h.UploadLoginBg)
-
-		r.Get("/api/members", h.ListMembers)
-
-		r.Get("/api/voice/rooms", h.VoiceRooms)
-
-		// Web Push / PWA notifications
-		r.Get("/api/push/vapid-public-key", h.GetVAPIDPublicKey)
-		r.Post("/api/push/subscribe", h.SavePushSubscription)
-		r.Post("/api/push/unsubscribe", h.RemovePushSubscription)
-		r.Get("/api/push/poll", h.PollUnread)
-		r.Post("/api/push/test", h.TestPush)
-	})
+	// All API routes and WebSocket are registered by the router package.
+	router.Register(r, h, authSvc, database, authLimiter, bus, wsHub, pluginList)
 
 	// Uploaded files
 	r.Get("/uploads/{filename}", h.ServeUpload)
@@ -231,10 +238,8 @@ func main() {
 	//   3. Built-in persistent CA   →  auto-generates a local CA on first run,
 	//      signs a server cert from it, saves everything to ./certs/, and serves
 	//      the CA cert at /ca-cert so users can install it once and be done.
-	httpsPort := getEnv("HTTPS_PORT", "8443")
-
-	certFile := getEnv("CHIRM_TLS_CERT", "")
-	keyFile  := getEnv("CHIRM_TLS_KEY",  "")
+	certFile := cfg.TLSCert
+	keyFile  := cfg.TLSKey
 
 	if certFile == "" {
 		if _, err := os.Stat("certs/cert.pem"); err == nil {
@@ -265,24 +270,24 @@ func main() {
 			lanIP := getLANIP()
 			log.Println("✦ TLS: using built-in self-signed CA (persistent).")
 			log.Printf("  Install the CA cert on each device to remove browser warnings:")
-			log.Printf("  ► Open http://%s:%s/ca-cert on each device and follow the OS prompts.", lanIP, port)
-			log.Println("  After installing, navigate to https://" + lanIP + ":" + httpsPort + " — no warnings.")
+			log.Printf("  ► Open http://%s:%s/ca-cert on each device and follow the OS prompts.", lanIP, cfg.Port)
+			log.Println("  After installing, navigate to https://" + lanIP + ":" + cfg.HTTPSPort + " — no warnings.")
 		}
 	}
 
 	if tlsErr == nil {
 		go func() {
 			tlsServer := &http.Server{
-				Addr:    ":" + httpsPort,
+				Addr:    ":" + cfg.HTTPSPort,
 				Handler: r,
 				TLSConfig: &tls.Config{
 					Certificates: []tls.Certificate{tlsCert},
 				},
 			}
 			if usingRealCert {
-				log.Printf("✦ Chirm HTTPS at https://%s:%s", getLANIP(), httpsPort)
+				log.Printf("✦ Chirm HTTPS at https://%s:%s", getLANIP(), cfg.HTTPSPort)
 			} else {
-				log.Printf("✦ Chirm HTTPS (self-signed CA) at https://%s:%s", getLANIP(), httpsPort)
+				log.Printf("✦ Chirm HTTPS (self-signed CA) at https://%s:%s", getLANIP(), cfg.HTTPSPort)
 			}
 			if err := tlsServer.ListenAndServeTLS("", ""); err != nil {
 				log.Printf("HTTPS server error: %v", err)
@@ -290,9 +295,35 @@ func main() {
 		}()
 	}
 
-	log.Printf("✦ Chirm running at http://localhost:%s", port)
-	log.Printf("  CA cert for device trust: http://%s:%s/ca-cert", getLANIP(), port)
-	log.Fatal(http.ListenAndServe(":"+port, r))
+	log.Printf("✦ Chirm running at http://localhost:%s", cfg.Port)
+	log.Printf("  CA cert for device trust: http://%s:%s/ca-cert", getLANIP(), cfg.Port)
+
+	httpServer := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: r,
+	}
+
+	// Graceful shutdown on SIGINT / SIGTERM.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-quit
+		log.Println("Shutting down...")
+		for _, p := range pluginList {
+			if err := p.Shutdown(); err != nil {
+				log.Printf("plugin %s shutdown error: %v", p.Name(), err)
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		httpServer.Shutdown(ctx)
+		database.Close()
+		os.Exit(0)
+	}()
+
+	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
 
 // ensurePersistentCert generates a local CA + server certificate on first run,
@@ -551,96 +582,4 @@ func getLANIP() string {
 		}
 	}
 	return "localhost"
-}
-
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-// loadDotenv reads a .env file and sets any environment variables that are not
-// already present in the environment.  It silently does nothing if the file
-// doesn't exist.  This keeps the "zero external dependencies" philosophy — no
-// need for godotenv or similar.
-func loadDotenv(path string) {
-	f, err := os.Open(path)
-	if err != nil {
-		return // file doesn't exist — perfectly fine
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		// Skip blanks and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		// Split on first '='
-		idx := strings.IndexByte(line, '=')
-		if idx < 1 {
-			continue
-		}
-		key := strings.TrimSpace(line[:idx])
-		val := strings.TrimSpace(line[idx+1:])
-
-		// Strip surrounding quotes (single or double)
-		if len(val) >= 2 {
-			if (val[0] == '"' && val[len(val)-1] == '"') ||
-				(val[0] == '\'' && val[len(val)-1] == '\'') {
-				val = val[1 : len(val)-1]
-			}
-		}
-
-		// Don't override existing env vars — explicit env always wins
-		if os.Getenv(key) == "" {
-			os.Setenv(key, val)
-		}
-	}
-}
-
-// --- Per-IP rate limiter ---
-
-type ipRateLimiter struct {
-	mu       sync.Mutex
-	limiters map[string]*rate.Limiter
-	r        rate.Limit
-	b        int
-}
-
-func newIPRateLimiter(r rate.Limit, b int) func(http.Handler) http.Handler {
-	rl := &ipRateLimiter{
-		limiters: make(map[string]*rate.Limiter),
-		r:        r,
-		b:        b,
-	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := r.RemoteAddr
-			// Strip port if present
-			if h, _, err := net.SplitHostPort(ip); err == nil {
-				ip = h
-			}
-			if !rl.get(ip).Allow() {
-				http.Error(w, `{"error":"too many requests"}`, http.StatusTooManyRequests)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-func (rl *ipRateLimiter) get(ip string) *rate.Limiter {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	if l, ok := rl.limiters[ip]; ok {
-		return l
-	}
-	l := rate.NewLimiter(rl.r, rl.b)
-	rl.limiters[ip] = l
-	return l
 }

@@ -184,3 +184,5 @@ const ChirmCache = (() => {
 
   return { get, set, appendMessage, updateMessage, deleteMessage, updateReactions, invalidate, clearAll, stats };
 })();
+
+export default ChirmCache;

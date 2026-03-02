@@ -1,3 +1,5 @@
+import WS from './ws.js';
+
 // voice.js — WebRTC voice/video room manager for Chirm
 // Mesh P2P topology. Server relays signaling only.
 // V14: Opus codec tuning, per-user controls, focus mode, speaking indicators, screen sharing.
@@ -451,6 +453,15 @@ const Voice = (() => {
   function onRoomState(data) {
     if (data.channel_id !== currentChannelId) return;
     const participants = data.participants || [];
+
+    // Sync into App.voiceParticipants so the sidebar shows participant names
+    if (!App.voiceParticipants[data.channel_id]) App.voiceParticipants[data.channel_id] = new Set();
+    for (const uid of participants) {
+      App.voiceParticipants[data.channel_id].add(uid);
+    }
+    if (App.user?.id) App.voiceParticipants[data.channel_id].add(App.user.id);
+    window.renderChannelList?.();
+
     for (const uid of participants) {
       if (uid !== App.user.id) createPeer(uid, true);
     }
@@ -1153,3 +1164,5 @@ const Voice = (() => {
     setFocus, toggleAutoFocus,
   };
 })();
+
+export default Voice;

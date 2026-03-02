@@ -179,7 +179,7 @@ func (h *Handler) TestPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subs, err := h.db.GetChannelPushSubscriptions("")
+	subs, err := h.db.GetAllPushSubscriptions()
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "db error")
 		return
@@ -227,12 +227,11 @@ type PushPayload struct {
 	Tag       string `json:"tag"`
 }
 
-// BroadcastPush sends a Web Push notification to all subscribers of the
-// specified channel (except the message author).
-// This is called non-blocking from SendMessage.
-func (h *Handler) BroadcastPush(channelName, authorUserID string, payload PushPayload) {
+// BroadcastPush sends a Web Push notification to all subscribers (except the
+// message author). This is called non-blocking from the MessageCreated event handler.
+func (h *Handler) BroadcastPush(authorUserID string, payload PushPayload) {
 	go func() {
-		subs, err := h.db.GetChannelPushSubscriptions(channelName)
+		subs, err := h.db.GetAllPushSubscriptions()
 		if err != nil || len(subs) == 0 {
 			return
 		}

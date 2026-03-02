@@ -1,46 +1,77 @@
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 
+/*
+ * ═══════════════════════════════════════════════════════════════
+ * CHIRM CSS VARIABLE CONTRACT  (public theming API)
+ * ═══════════════════════════════════════════════════════════════
+ * Override any variable below in a <style> tag or external sheet
+ * to create a custom theme.  Variables are grouped by category:
+ *
+ *   BACKGROUNDS  – surface hierarchy (void → elevated)
+ *   ACCENT       – primary interactive colour and its variants
+ *   TEXT         – readable text hierarchy
+ *   SEMANTIC     – success / danger / warning + status dots
+ *   BORDERS      – subtle separators and shadows
+ *   LAYOUT       – sidebar widths (not colour-related)
+ *   SHAPE        – border-radius tokens
+ *
+ * Only the variables in this :root block are guaranteed stable.
+ * Internal selectors may use them but should not introduce new
+ * ad-hoc values — use a token from this list or add one here.
+ * ═══════════════════════════════════════════════════════════════
+ */
 :root {
-  --bg-void: #09090c;
-  --bg-base: #0f1117;
-  --bg-sidebar: #13151e;
-  --bg-surface: #181b26;
-  --bg-elevated: #1e2130;
-  --bg-hover: #242740;
-  --bg-active: #2a2f4a;
-  --bg-input: #0d0f18;
+  /* ── Backgrounds (darkest → lightest) ─────────────────────── */
+  --bg-void: #09090c;       /* page background behind everything  */
+  --bg-base: #0f1117;       /* main chat area background          */
+  --bg-sidebar: #13151e;    /* sidebar panel background           */
+  --bg-surface: #181b26;    /* card / message surface             */
+  --bg-elevated: #1e2130;   /* tooltips, dropdowns, modals        */
+  --bg-hover: #242740;      /* hover state overlay                */
+  --bg-active: #2a2f4a;     /* pressed / selected overlay         */
+  --bg-input: #0d0f18;      /* text inputs and textareas          */
 
-  --accent: #7c6af5;
-  --accent-hover: #9180ff;
-  --accent-dim: rgba(124,106,245,0.18);
-  --accent-text: #a89bf7;
+  /* ── Accent (primary interactive colour) ──────────────────── */
+  --accent: #7c6af5;                    /* buttons, links, highlights     */
+  --accent-hover: #9180ff;              /* hovered accent elements        */
+  --accent-dim: rgba(124,106,245,0.18); /* subtle accent tint / glow      */
+  --accent-text: #a89bf7;               /* accent-coloured text           */
 
-  --text-primary: #e8eaf0;
-  --text-secondary: #9196a8;
-  --text-muted: #5a5f72;
-  --text-link: #7c9ef5;
+  /* ── Text hierarchy ───────────────────────────────────────── */
+  --text-primary: #e8eaf0;   /* body text                          */
+  --text-secondary: #9196a8; /* labels, descriptions, placeholders */
+  --text-muted: #5a5f72;     /* timestamps, hints, disabled        */
+  --text-link: #7c9ef5;      /* hyperlinks                         */
 
-  --success: #3fba7a;
-  --danger: #e05252;
-  --warning: #e0a030;
-  --online: #3fba7a;
-  --idle: #e0a030;
-  --offline: #5a5f72;
+  /* ── Semantic colours ─────────────────────────────────────── */
+  --success: #3fba7a;   /* positive feedback, online dot          */
+  --danger: #e05252;    /* destructive actions, error messages    */
+  --warning: #e0a030;   /* warnings, idle dot                     */
+  --online: #3fba7a;    /* presence: online status dot            */
+  --idle: #e0a030;      /* presence: idle / away status dot       */
+  --offline: #5a5f72;   /* presence: offline status dot           */
 
-  --border: rgba(255,255,255,0.06);
-  --border-strong: rgba(255,255,255,0.10);
-  --shadow: 0 4px 24px rgba(0,0,0,0.5);
+  /* ── Borders & shadow ─────────────────────────────────────── */
+  --border: rgba(255,255,255,0.06);        /* default subtle border       */
+  --border-strong: rgba(255,255,255,0.10); /* emphasized border           */
+  --shadow: 0 4px 24px rgba(0,0,0,0.5);   /* modal / dropdown shadow     */
 
-  --sidebar-w: 240px;
-  --members-w: 220px;
-  --radius: 8px;
-  --radius-sm: 4px;
-  --radius-lg: 12px;
+  /* ── Layout widths (not colour tokens) ────────────────────── */
+  --sidebar-w: 240px;   /* left channel sidebar width             */
+  --members-w: 220px;   /* right members sidebar width            */
+
+  /* ── Shape tokens ─────────────────────────────────────────── */
+  --radius: 8px;        /* default border-radius                  */
+  --radius-sm: 4px;     /* small elements (badges, inputs)        */
+  --radius-lg: 12px;    /* large cards, modals                    */
 
   font-family: 'Outfit', system-ui, sans-serif;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Suppress transitions during initial UI state restore to prevent collapse flash */
+.no-transition, .no-transition * { transition: none !important; animation: none !important; }
 
 html { height: 100%; }
 body { height: 100%; overflow: hidden; background: var(--bg-void); color: var(--text-primary); }
@@ -70,8 +101,13 @@ body { height: 100%; overflow: hidden; background: var(--bg-void); color: var(--
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
-  /* Ensure it never collapses below its defined width */
   min-width: var(--sidebar-w);
+  transition: width 0.25s ease, min-width 0.25s ease, border-color 0.25s ease;
+}
+#sidebar.desktop-collapsed {
+  width: 0;
+  min-width: 0;
+  border-right-color: transparent;
 }
 
 #server-header {
@@ -400,7 +436,7 @@ body { height: 100%; overflow: hidden; background: var(--bg-void); color: var(--
 .emoji-picker {
   position: fixed;
   z-index: 9999;
-  width: 300px;
+  width: 320px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
@@ -421,7 +457,7 @@ body { height: 100%; overflow: hidden; background: var(--bg-void); color: var(--
 .emoji-picker-tabs::-webkit-scrollbar { display: none; }
 .emoji-tab {
   background: none; border: none; cursor: pointer;
-  padding: 5px 9px; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  padding: 5px 5px; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   font-size: 18px; color: var(--text-secondary);
   transition: all 0.1s; white-space: nowrap;
   border-bottom: 2px solid transparent;
@@ -782,6 +818,8 @@ img.msg-inline-img {
 }
 .status-dot.online { background: var(--online); }
 .status-dot.offline { background: var(--offline); }
+.status-dot.idle { background: var(--idle); }
+.status-dot.invisible { background: var(--offline); opacity: 0.5; }
 
 /* ─── MODALS ─── */
 .modal-overlay {
@@ -834,6 +872,41 @@ img.msg-inline-img {
 .admin-tab:hover { color: var(--text-primary); }
 .admin-pane { display: none; }
 .admin-pane.active { display: block; }
+/* user settings panes reuse .admin-tabs/.admin-tab; pane visibility is toggled via inline style */
+.us-pane { display: none; }
+.us-pane.active { display: block; }
+
+/* ─── THEME PICKER ─── */
+.theme-color-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px 16px;
+  margin-bottom: 4px;
+}
+.theme-color-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.theme-color-item input[type="color"] {
+  width: 32px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: var(--bg-elevated);
+  padding: 2px;
+}
+.theme-color-item label {
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-secondary);
+  margin: 0;
+  cursor: pointer;
+}
 
 /* ─── FORMS ─── */
 .form-group { margin-bottom: 16px; }
@@ -1096,9 +1169,9 @@ pre code { background: none; border: none; padding: 0; }
 }
 #sidebar-overlay.open { display: block; }
 
-/* ─── HAMBURGER BUTTON (mobile only) ─── */
+/* ─── HAMBURGER / SIDEBAR TOGGLE BUTTON ─── */
 #hamburger-btn {
-  display: none;
+  display: flex;
   background: none; border: none; cursor: pointer;
   color: var(--text-secondary); font-size: 20px;
   padding: 4px 8px; border-radius: var(--radius-sm);
@@ -2362,3 +2435,109 @@ pre code { background: none; border: none; padding: 0; }
     padding: 8px 10px;
   }
 }
+
+.bot-badge {
+    font-size: 10px; font-weight: 700;
+    background: var(--accent); color: white;
+    border-radius: 3px; padding: 1px 4px;
+    vertical-align: middle; margin-left: 4px;
+}
+
+/* ── Status dot — DND ────────────────────────────────────── */
+.status-dot.dnd { background: var(--danger); }
+
+/* ── Status picker popup ─────────────────────────────────── */
+.status-picker {
+  position: fixed;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 6px;
+  z-index: 10000;
+  min-width: 168px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+}
+.status-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-primary);
+  user-select: none;
+}
+.status-option:hover { background: var(--bg-hover); }
+
+/* ── User info panel — hover hint ───────────────────────── */
+#user-info { transition: opacity 0.12s; }
+#user-info:hover { opacity: 0.82; }
+
+/* ── Profile view modal ──────────────────────────────────── */
+.profile-view-overlay { align-items: center; }
+.profile-view-modal {
+  position: relative;
+  width: 480px;
+  max-width: 95vw;
+  padding: 0;
+  overflow: hidden;
+}
+.profile-banner {
+  aspect-ratio: 16 / 9;
+  flex-shrink: 0;
+}
+.profile-header {
+  padding: 0 20px 12px;
+  margin-top: -40px;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+.profile-avatar-wrap .avatar {
+  border: 4px solid var(--bg-surface);
+  border-radius: 50%;
+}
+.profile-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  flex-wrap: wrap;
+}
+.profile-username { font-size: 20px; font-weight: 700; }
+.profile-status-label {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.profile-body { padding: 0 20px 20px; overflow-y: auto; max-height: 50vh; }
+.profile-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-top: 16px;
+  margin-bottom: 6px;
+}
+.profile-bio {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  overflow-wrap: break-word;
+}
+.profile-meta { margin-bottom: 4px; font-size: 13px; }
+.profile-links { display: flex; flex-direction: column; gap: 4px; }
+.profile-link {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+.profile-link:hover { text-decoration: underline; }

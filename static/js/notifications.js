@@ -83,12 +83,13 @@ const ChirmNotifs = (() => {
       return;
     }
     try {
-      const res = await fetch('/api/push/vapid-public-key', { credentials: 'include' });
+      const res = await fetch('/api/v1/push/vapid-public-key', { credentials: 'include' });
       if (!res.ok) {
         console.warn('[Chirm Notifs] Could not fetch VAPID key:', res.status);
         return;
       }
-      const { public_key } = await res.json();
+      const _vapidBody = await res.json();
+      const { public_key } = _vapidBody.data ?? _vapidBody;
       if (!public_key) {
         console.warn('[Chirm Notifs] Server returned no VAPID public key');
         return;
@@ -108,7 +109,7 @@ const ChirmNotifs = (() => {
       }
 
       // Send subscription to server
-      const saveRes = await fetch('/api/push/subscribe', {
+      const saveRes = await fetch('/api/v1/push/subscribe', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -146,7 +147,7 @@ const ChirmNotifs = (() => {
     try {
       const sub = await _swReg.pushManager.getSubscription();
       if (sub) {
-        await fetch('/api/push/unsubscribe', {
+        await fetch('/api/v1/push/unsubscribe', {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -369,3 +370,5 @@ const ChirmNotifs = (() => {
     _isMentionedPublic,   // exposed for WS handler
   };
 })();
+
+export default ChirmNotifs;

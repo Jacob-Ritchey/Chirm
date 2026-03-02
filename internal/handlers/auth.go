@@ -2,12 +2,20 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"chirm/internal/db"
+	"chirm/internal/events"
 )
 
 // Fix #11: Only allow safe, unambiguous characters in usernames.
@@ -130,17 +138,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Notify all connected clients so their member sidebars update live.
-	h.hub.Broadcast(WSEvent{
-		Type: "member.new",
-		Data: map[string]interface{}{
-			"id":       u.ID,
-			"username": u.Username,
-			"avatar":   u.Avatar,
-			"is_owner": u.IsOwner,
-			"roles":    []interface{}{},
-		},
-	})
+	h.bus.Publish(events.Event{Type: events.UserJoined, Data: events.UserJoinedData{User: u}})
 
 	setTokenCookie(w, r, token)
 	created(w, map[string]interface{}{"user": u, "token": token})
@@ -177,8 +175,11 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Username string `json:"username"`
-		Avatar   string `json:"avatar"`
+		Username   string  `json:"username"`
+		Avatar     string  `json:"avatar"`
+		Bio        string  `json:"bio"`
+		Links      string  `json:"links"`
+		Banner     *string `json:"banner"` // pointer so we can detect explicit empty-string (clear)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		errResp(w, http.StatusBadRequest, "invalid request")
@@ -190,12 +191,33 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		username = u.Username
 	}
 
-	if err := h.db.UpdateUser(u.ID, username, req.Avatar); err != nil {
+	bio := req.Bio
+	if len(bio) > 500 {
+		bio = bio[:500]
+	}
+
+	links := req.Links
+	if links == "" {
+		links = "[]"
+	}
+
+	if err := h.db.UpdateUserProfile(u.ID, username, req.Avatar, bio, links); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
 
+	// Banner field: update only when explicitly provided
+	if req.Banner != nil {
+		h.db.UpdateUserBanner(u.ID, *req.Banner)
+	}
+
 	updated, _ := h.db.GetUserByID(u.ID)
+
+	h.bus.Publish(events.Event{
+		Type: events.UserProfileChanged,
+		Data: events.UserProfileChangedData{UserID: updated.ID, Username: updated.Username, Avatar: updated.Avatar},
+	})
+
 	ok(w, updated)
 }
 
@@ -267,6 +289,169 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, _ := h.db.GetUserByID(u.ID)
+
+	h.bus.Publish(events.Event{
+		Type: events.UserProfileChanged,
+		Data: events.UserProfileChangedData{UserID: updated.ID, Username: updated.Username, Avatar: updated.Avatar},
+	})
+
 	ok(w, updated)
+}
+
+// UploadBanner accepts a multipart image and saves it as the user's profile banner.
+func (h *Handler) UploadBanner(w http.ResponseWriter, r *http.Request) {
+	u, err := h.currentUser(r)
+	if err != nil || u == nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	maxMBStr, _ := h.db.GetSetting("max_upload_mb")
+	maxMB := int64(25)
+	if n, err := strconv.ParseInt(maxMBStr, 10, 64); err == nil && n > 0 {
+		maxMB = n
+	}
+	maxBytes := maxMB * 1024 * 1024
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	if err := r.ParseMultipartForm(maxBytes); err != nil {
+		errResp(w, http.StatusBadRequest, fmt.Sprintf("file too large (max %dMB)", maxMB))
+		return
+	}
+
+	file, header, err := r.FormFile("banner")
+	if err != nil {
+		errResp(w, http.StatusBadRequest, "no file provided")
+		return
+	}
+	defer file.Close()
+
+	buf := make([]byte, 512)
+	n, _ := file.Read(buf)
+	mimeType := http.DetectContentType(buf[:n])
+
+	allowedBannerTypes := map[string]bool{
+		"image/jpeg": true,
+		"image/png":  true,
+		"image/gif":  true,
+		"image/webp": true,
+	}
+	if !allowedBannerTypes[mimeType] {
+		errResp(w, http.StatusBadRequest, "banner must be JPEG, PNG, GIF or WebP")
+		return
+	}
+
+	file.Seek(0, 0)
+
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = ".jpg"
+	}
+	filename := "banner_" + newID() + ext
+	destPath := filepath.Join(h.dataDir, "uploads", filename)
+
+	dest, err := os.Create(destPath)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to save banner")
+		return
+	}
+	defer dest.Close()
+	if _, err := io.Copy(dest, file); err != nil {
+		os.Remove(destPath)
+		errResp(w, http.StatusInternalServerError, "failed to write banner")
+		return
+	}
+
+	bannerURL := "/uploads/" + filename
+	if err := h.db.UpdateUserBanner(u.ID, bannerURL); err != nil {
+		os.Remove(destPath)
+		errResp(w, http.StatusInternalServerError, "failed to update banner")
+		return
+	}
+
+	updated, _ := h.db.GetUserByID(u.ID)
+	ok(w, updated)
+}
+
+// UpdateStatus sets the current user's online status (online | away | dnd).
+func (h *Handler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
+	u, err := h.currentUser(r)
+	if err != nil || u == nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errResp(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	validStatuses := map[string]bool{"online": true, "away": true, "dnd": true, "invisible": true}
+	if !validStatuses[req.Status] {
+		errResp(w, http.StatusBadRequest, "status must be one of: online, away, dnd, invisible")
+		return
+	}
+
+	if err := h.db.UpdateUserStatus(u.ID, req.Status); err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to update status")
+		return
+	}
+
+	h.bus.Publish(events.Event{
+		Type: events.UserStatusChanged,
+		Data: events.UserStatusChangedData{UserID: u.ID, Status: req.Status},
+	})
+
+	ok(w, map[string]string{"status": req.Status})
+}
+
+// GetUserProfile returns public profile fields for any user by ID.
+func (h *Handler) GetUserProfile(w http.ResponseWriter, r *http.Request) {
+	_, err := h.currentUser(r)
+	if err != nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	userID := chi.URLParam(r, "id")
+	u, err := h.db.GetUserByID(userID)
+	if err != nil {
+		errResp(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	type PublicProfile struct {
+		ID        string    `json:"id"`
+		Username  string    `json:"username"`
+		Avatar    string    `json:"avatar"`
+		Bio       string    `json:"bio"`
+		Links     string    `json:"links"`
+		Banner    string    `json:"banner"`
+		Status    string    `json:"status"`
+		IsOwner   bool      `json:"is_owner"`
+		Roles     []db.Role `json:"roles"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+
+	publicStatus := u.Status
+	if publicStatus == "invisible" {
+		publicStatus = "offline"
+	}
+
+	ok(w, PublicProfile{
+		ID:        u.ID,
+		Username:  u.Username,
+		Avatar:    u.Avatar,
+		Bio:       u.Bio,
+		Links:     u.Links,
+		Banner:    u.Banner,
+		Status:    publicStatus,
+		IsOwner:   u.IsOwner,
+		Roles:     u.Roles,
+		CreatedAt: u.CreatedAt,
+	})
 }
 

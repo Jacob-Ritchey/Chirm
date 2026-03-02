@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"chirm/internal/db"
+	"chirm/internal/events"
 )
 
 // --- Users ---
@@ -20,34 +21,44 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	if !isAdmin {
 		return
 	}
-	users, err := h.db.ListUsers()
+	before, limit := parsePagination(r)
+	items, err := h.db.ListUsersPaginated(before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list users")
 		return
 	}
-	if users == nil {
-		users = []db.User{}
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
 	}
-	ok(w, users)
+	if items == nil {
+		items = []db.User{}
+	}
+	ok(w, map[string]interface{}{"items": items, "has_more": hasMore})
 }
 
 func (h *Handler) ListMembers(w http.ResponseWriter, r *http.Request) {
-	users, err := h.db.ListUsers()
+	before, limit := parsePagination(r)
+	users, err := h.db.ListUsersPaginated(before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list members")
 		return
 	}
+	hasMore := len(users) > limit
+	if hasMore {
+		users = users[:limit]
+	}
 	// Return only public fields
 	type PublicUser struct {
-		ID       string   `json:"id"`
-		Username string   `json:"username"`
-		Avatar   string   `json:"avatar"`
-		IsOwner  bool     `json:"is_owner"`
+		ID       string    `json:"id"`
+		Username string    `json:"username"`
+		Avatar   string    `json:"avatar"`
+		IsOwner  bool      `json:"is_owner"`
 		Roles    []db.Role `json:"roles"`
 	}
-	var members []PublicUser
+	items := make([]PublicUser, 0, len(users))
 	for _, u := range users {
-		members = append(members, PublicUser{
+		items = append(items, PublicUser{
 			ID:       u.ID,
 			Username: u.Username,
 			Avatar:   u.Avatar,
@@ -55,10 +66,7 @@ func (h *Handler) ListMembers(w http.ResponseWriter, r *http.Request) {
 			Roles:    u.Roles,
 		})
 	}
-	if members == nil {
-		members = []PublicUser{}
-	}
-	ok(w, members)
+	ok(w, map[string]interface{}{"items": items, "has_more": hasMore})
 }
 
 func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -106,21 +114,27 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusInternalServerError, "failed to delete user")
 		return
 	}
+	h.bus.Publish(events.Event{Type: events.UserLeft, Data: events.UserLeftData{UserID: id}})
 	ok(w, map[string]string{"message": "deleted"})
 }
 
 // --- Roles ---
 
 func (h *Handler) ListRoles(w http.ResponseWriter, r *http.Request) {
-	roles, err := h.db.ListRoles()
+	before, limit := parsePagination(r)
+	items, err := h.db.ListRolesPaginated(before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list roles")
 		return
 	}
-	if roles == nil {
-		roles = []db.Role{}
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
 	}
-	ok(w, roles)
+	if items == nil {
+		items = []db.Role{}
+	}
+	ok(w, map[string]interface{}{"items": items, "has_more": hasMore})
 }
 
 func (h *Handler) CreateRole(w http.ResponseWriter, r *http.Request) {
@@ -223,15 +237,20 @@ func (h *Handler) ListInvites(w http.ResponseWriter, r *http.Request) {
 	if !isAdmin {
 		return
 	}
-	invites, err := h.db.ListInvites()
+	before, limit := parsePagination(r)
+	items, err := h.db.ListInvitesPaginated(before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list invites")
 		return
 	}
-	if invites == nil {
-		invites = []db.Invite{}
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
 	}
-	ok(w, invites)
+	if items == nil {
+		items = []db.Invite{}
+	}
+	ok(w, map[string]interface{}{"items": items, "has_more": hasMore})
 }
 
 func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
@@ -297,6 +316,7 @@ func (h *Handler) GetPublicSettings(w http.ResponseWriter, r *http.Request) {
 		"login_bg_color", "login_bg_image", "login_bg_overlay",
 		"require_invite", "allow_registration",
 		"agreement_enabled", "agreement_text",
+		"theme_css_vars",
 	}
 	result := make(map[string]string)
 	for _, k := range publicKeys {
@@ -345,6 +365,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		"login_bg_overlay":   true,
 		"agreement_enabled":  true,
 		"agreement_text":     true,
+		"theme_css_vars":     true,
 	}
 	for k, v := range req {
 		if allowed[k] {
