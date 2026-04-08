@@ -237,7 +237,7 @@ chirm/
     ├── setup.html                 Setup wizard
     ├── manifest.json              PWA manifest
     ├── sw.js                      Service worker (push, caching)
-    ├── css/app.css                Discord-style dark theme (~2400 lines)
+    ├── css/app.css                Full App Theming (~2400 lines)
     └── js/
         ├── app.js                 Application coordinator, boot, event handlers
         ├── api.js                 HTTP client wrapper
