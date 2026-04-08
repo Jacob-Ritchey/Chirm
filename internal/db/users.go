@@ -29,6 +29,8 @@ func (s *Store) GetUserByID(id string) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
+	u.Bio = s.decryptField(u.ID, "user-bio", u.Bio)
+	u.Links = s.decryptField(u.ID, "user-links", u.Links)
 	u.IsOwner = owner == 1
 	u.Roles, _ = s.GetUserRoles(id)
 	u.Permissions = s.ComputePermissions(u)
@@ -44,6 +46,8 @@ func (s *Store) GetUserByUsername(username string) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
+	u.Bio = s.decryptField(u.ID, "user-bio", u.Bio)
+	u.Links = s.decryptField(u.ID, "user-links", u.Links)
 	u.IsOwner = owner == 1
 	u.Roles, _ = s.GetUserRoles(u.ID)
 	u.Permissions = s.ComputePermissions(u)
@@ -59,6 +63,8 @@ func (s *Store) GetUserByEmail(email string) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
+	u.Bio = s.decryptField(u.ID, "user-bio", u.Bio)
+	u.Links = s.decryptField(u.ID, "user-links", u.Links)
 	u.IsOwner = owner == 1
 	u.Roles, _ = s.GetUserRoles(u.ID)
 	u.Permissions = s.ComputePermissions(u)
@@ -76,6 +82,8 @@ func (s *Store) ListUsers() ([]User, error) {
 		var u User
 		var owner int
 		rows.Scan(&u.ID, &u.Username, &u.Email, &u.Avatar, &u.Bio, &u.Links, &u.Banner, &u.Status, &owner, &u.CreatedAt)
+		u.Bio = s.decryptField(u.ID, "user-bio", u.Bio)
+		u.Links = s.decryptField(u.ID, "user-links", u.Links)
 		u.IsOwner = owner == 1
 		u.Roles, _ = s.GetUserRoles(u.ID)
 		users = append(users, u)
@@ -113,6 +121,8 @@ func (s *Store) ListUsersPaginated(before string, limit int) ([]User, error) {
 		var u User
 		var owner int
 		rows.Scan(&u.ID, &u.Username, &u.Email, &u.Avatar, &u.Bio, &u.Links, &u.Banner, &u.Status, &owner, &u.CreatedAt)
+		u.Bio = s.decryptField(u.ID, "user-bio", u.Bio)
+		u.Links = s.decryptField(u.ID, "user-links", u.Links)
 		u.IsOwner = owner == 1
 		u.Roles, _ = s.GetUserRoles(u.ID)
 		users = append(users, u)
@@ -126,7 +136,15 @@ func (s *Store) UpdateUser(id, username, avatar string) error {
 }
 
 func (s *Store) UpdateUserProfile(id, username, avatar, bio, links string) error {
-	_, err := s.members.Exec(`UPDATE users SET username = ?, avatar = ?, bio = ?, links = ? WHERE id = ?`, username, avatar, bio, links, id)
+	encBio, err := s.encryptField(id, "user-bio", bio)
+	if err != nil {
+		return err
+	}
+	encLinks, err := s.encryptField(id, "user-links", links)
+	if err != nil {
+		return err
+	}
+	_, err = s.members.Exec(`UPDATE users SET username = ?, avatar = ?, bio = ?, links = ? WHERE id = ?`, username, avatar, encBio, encLinks, id)
 	return err
 }
 

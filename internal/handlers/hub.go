@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 
+	"chirm/internal/db"
 	"chirm/internal/hub"
 )
 
@@ -17,6 +18,11 @@ func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
 			return
 		}
+		u, err := h.store.GetUserByID(c.UserID)
+		if err != nil || u == nil || !h.store.HasPermission(u, db.PermReadMessages) {
+			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "unauthorized"}})
+			return
+		}
 		ch, err := h.store.GetChannelByID(d.ChannelID)
 		if err != nil || ch == nil {
 			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "channel not found"}})
@@ -29,6 +35,11 @@ func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 			ChannelID string `json:"channel_id"`
 		}
 		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
+			return
+		}
+		u, err := h.store.GetUserByID(c.UserID)
+		if err != nil || u == nil || !h.store.HasPermission(u, db.PermReadMessages) {
+			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "unauthorized"}})
 			return
 		}
 		ch, err := h.store.GetChannelByID(d.ChannelID)

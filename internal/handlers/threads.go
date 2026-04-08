@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -14,10 +15,51 @@ import (
 func (h *Handler) ListThreads(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	if _, err := h.store.GetChannelByID(channelID); err != nil {
-		errResp(w, http.StatusNotFound, "channel not found")
+		errResp(w, http.StatusForbidden, "channel not found")
 		return
 	}
 
+	// Page-based path (for forum/gallery channel views).
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		page, _ := strconv.Atoi(pageStr)
+		if page < 1 {
+			page = 1
+		}
+		perPage := 20
+		if pp, _ := strconv.Atoi(r.URL.Query().Get("per_page")); pp > 0 && pp <= 100 {
+			perPage = pp
+		}
+		total, err := h.store.CountThreadsByChannel(channelID)
+		if err != nil {
+			errResp(w, http.StatusInternalServerError, "failed to count threads")
+			return
+		}
+		totalPages := (total + perPage - 1) / perPage
+		if totalPages == 0 {
+			totalPages = 1
+		}
+		if page > totalPages {
+			page = totalPages
+		}
+		threads, err := h.store.ListThreadsByChannelPaged(channelID, page, perPage)
+		if err != nil {
+			errResp(w, http.StatusInternalServerError, "failed to list threads")
+			return
+		}
+		if threads == nil {
+			threads = []db.Thread{}
+		}
+		ok(w, map[string]interface{}{
+			"threads":     threads,
+			"total":       total,
+			"page":        page,
+			"per_page":    perPage,
+			"total_pages": totalPages,
+		})
+		return
+	}
+
+	// Cursor-based path (for text channel thread panels — unchanged).
 	before, limit := parsePagination(r)
 	threads, err := h.store.ListThreadsByChannel(channelID, before, limit+1)
 	if err != nil {
@@ -47,7 +89,7 @@ func (h *Handler) CreateThread(w http.ResponseWriter, r *http.Request) {
 
 	channelID := chi.URLParam(r, "id")
 	if _, err := h.store.GetChannelByID(channelID); err != nil {
-		errResp(w, http.StatusNotFound, "channel not found")
+		errResp(w, http.StatusForbidden, "channel not found")
 		return
 	}
 

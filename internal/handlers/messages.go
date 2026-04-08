@@ -22,7 +22,7 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.store.GetChannelByID(channelID); err != nil {
-		errResp(w, http.StatusNotFound, "channel not found")
+		errResp(w, http.StatusForbidden, "channel not found")
 		return
 	}
 
@@ -61,7 +61,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 
 	channelID := chi.URLParam(r, "id")
 	if _, err := h.store.GetChannelByID(channelID); err != nil {
-		errResp(w, http.StatusNotFound, "channel not found")
+		errResp(w, http.StatusForbidden, "channel not found")
 		return
 	}
 

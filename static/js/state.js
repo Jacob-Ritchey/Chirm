@@ -27,6 +27,8 @@ export const App = {
   threadMessagesHasMore: {},   // threadId → bool
   pendingThreadUpload: null,   // attachment pending in thread input
   threadNavStack: [],          // breadcrumb history when viewing a thread full-screen
+  channelPage: {},             // channelId → current page number (forum/gallery)
+  channelTotalPages: {},       // channelId → total page count (forum/gallery)
 };
 
 export function persistUnread() {

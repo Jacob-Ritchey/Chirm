@@ -106,6 +106,56 @@ func (s *Store) GetThreadByChannelID(threadChannelID string) (*Thread, error) {
 	return s.GetThreadByID(threadChannelID)
 }
 
+// CountThreadsByChannel returns the total number of threads in a channel.
+func (s *Store) CountThreadsByChannel(channelID string) (int, error) {
+	pdb, err := s.channels.For(channelID)
+	if err != nil {
+		return 0, err
+	}
+	var count int
+	err = pdb.QueryRow(`SELECT COUNT(*) FROM thread_index`).Scan(&count)
+	return count, err
+}
+
+// ListThreadsByChannelPaged returns threads for a given page (1-indexed), ordered by
+// creation time ascending (oldest = page 1) then reversed so newest of the batch
+// appears first in the returned slice. Used by forum/gallery channel views.
+func (s *Store) ListThreadsByChannelPaged(channelID string, page, pageSize int) ([]Thread, error) {
+	pdb, err := s.channels.For(channelID)
+	if err != nil {
+		return nil, err
+	}
+	offset := (page - 1) * pageSize
+	rows, err := pdb.Query(
+		`SELECT id, thread_channel_id, name, creator_username, source_message_id,
+		        message_count, last_activity_at, created_at
+		 FROM thread_index
+		 ORDER BY created_at ASC
+		 LIMIT ? OFFSET ?`, pageSize, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var threads []Thread
+	for rows.Next() {
+		var t Thread
+		var sourceMsgID sql.NullString
+		rows.Scan(&t.ID, &t.ThreadChannelID, &t.Name, &t.CreatorUsername, &sourceMsgID,
+			&t.MessageCount, &t.LastActivityAt, &t.CreatedAt)
+		t.ChannelID = channelID
+		if sourceMsgID.Valid {
+			t.SourceMessageID = &sourceMsgID.String
+		}
+		threads = append(threads, t)
+	}
+	// Reverse so newest-created of the batch appears first.
+	for i, j := 0, len(threads)-1; i < j; i, j = i+1, j-1 {
+		threads[i], threads[j] = threads[j], threads[i]
+	}
+	return threads, nil
+}
+
 // ListThreadsByChannel returns threads in a parent channel ordered by last activity,
 // reading from the parent channel's thread_index table.
 func (s *Store) ListThreadsByChannel(channelID string, before string, limit int) ([]Thread, error) {

@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -240,6 +239,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.store.UseInvite(req.InviteCode)
+		h.store.TruncateInviteChain(req.InviteCode)
 	}
 
 	hash, err := h.auth.HashPassword(req.Password)
@@ -609,13 +609,7 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 	filename := "avatar_" + newID() + ext
 	destPath := filepath.Join(h.dataDir, "uploads", filename)
 
-	dest, err := os.Create(destPath)
-	if err != nil {
-		errResp(w, http.StatusInternalServerError, "failed to save avatar")
-		return
-	}
-	defer dest.Close()
-	if _, err := io.Copy(dest, file); err != nil {
+	if _, err := h.writeEncryptedFile(destPath, file); err != nil {
 		os.Remove(destPath)
 		errResp(w, http.StatusInternalServerError, "failed to write avatar")
 		return
@@ -692,13 +686,7 @@ func (h *Handler) UploadBanner(w http.ResponseWriter, r *http.Request) {
 	filename := "banner_" + newID() + ext
 	destPath := filepath.Join(h.dataDir, "uploads", filename)
 
-	dest, err := os.Create(destPath)
-	if err != nil {
-		errResp(w, http.StatusInternalServerError, "failed to save banner")
-		return
-	}
-	defer dest.Close()
-	if _, err := io.Copy(dest, file); err != nil {
+	if _, err := h.writeEncryptedFile(destPath, file); err != nil {
 		os.Remove(destPath)
 		errResp(w, http.StatusInternalServerError, "failed to write banner")
 		return

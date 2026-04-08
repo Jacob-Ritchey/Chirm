@@ -21,10 +21,11 @@ type Handler struct {
 	bus           *events.Bus
 	dataDir       string
 	allowedOrigin string
+	encKey        *[32]byte // nil when CHIRM_ENCRYPTION_KEY is not set
 }
 
-func New(store *db.Store, authSvc *auth.Service, h *hub.Hub, bus *events.Bus, dataDir, allowedOrigin string) *Handler {
-	return &Handler{store: store, auth: authSvc, hub: h, bus: bus, dataDir: dataDir, allowedOrigin: allowedOrigin}
+func New(store *db.Store, authSvc *auth.Service, h *hub.Hub, bus *events.Bus, dataDir, allowedOrigin string, encKey *[32]byte) *Handler {
+	return &Handler{store: store, auth: authSvc, hub: h, bus: bus, dataDir: dataDir, allowedOrigin: allowedOrigin, encKey: encKey}
 }
 
 // makeUpgrader builds a WebSocket upgrader that validates the Origin header.

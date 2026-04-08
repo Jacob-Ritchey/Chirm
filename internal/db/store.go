@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"chirm/internal/crypto"
 	_ "modernc.org/sqlite"
 )
 
@@ -29,16 +30,17 @@ type Store struct {
 	members  *sql.DB
 	server   *sql.DB
 	channels *ChannelStore
+	encKey   *[32]byte // nil when CHIRM_ENCRYPTION_KEY is not set
 }
 
 // New opens (or creates) the four database tiers under dataDir and runs
-// any pending migrations on each.
-func New(dataDir string) (*Store, error) {
+// any pending migrations on each. encKey may be nil (encryption disabled).
+func New(dataDir string, encKey *[32]byte) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(dataDir, "channels"), 0755); err != nil {
 		return nil, fmt.Errorf("create channels dir: %w", err)
 	}
 
-	s := &Store{}
+	s := &Store{encKey: encKey}
 	var err error
 
 	s.auth, err = openDB(filepath.Join(dataDir, "auth.db"))
@@ -99,4 +101,29 @@ func NewID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// encryptField encrypts a DB field value when encryption is enabled.
+// Returns the plaintext unchanged when encKey is nil or plaintext is empty.
+func (s *Store) encryptField(recordID, field, plaintext string) (string, error) {
+	if s.encKey == nil || plaintext == "" {
+		return plaintext, nil
+	}
+	return crypto.EncryptField(s.encKey, recordID, field, plaintext)
+}
+
+// decryptField decrypts a DB field value when encryption is enabled.
+// Returns the value unchanged when encKey is nil, value is empty, or value
+// lacks the enc: prefix (legacy plaintext — fail-open for lazy migration).
+func (s *Store) decryptField(recordID, field, value string) string {
+	if s.encKey == nil || value == "" {
+		return value
+	}
+	dec, err := crypto.DecryptField(s.encKey, recordID, field, value)
+	if err != nil {
+		// ErrNotEncrypted = legacy plaintext row; other errors = corrupt data.
+		// Fail-open in both cases so old unencrypted records remain readable.
+		return value
+	}
+	return dec
 }

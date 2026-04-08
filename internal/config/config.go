@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"chirm/internal/crypto"
 )
 
 // Config holds all runtime configuration for Chirm.
@@ -21,6 +23,7 @@ type Config struct {
 	MaxUploadMB      int64
 	AuditLogPath     string // path to audit log file; empty disables audit logging
 	LogRetentionDays int    // how many days to keep audit logs (default 7)
+	EncryptionKey    *[32]byte // nil when CHIRM_ENCRYPTION_KEY is absent; encryption is opt-in
 }
 
 // Load reads the .env file (if present) then populates Config from environment variables.
@@ -52,6 +55,11 @@ func Load() (*Config, error) {
 		}
 	}
 
+	encKey, err := crypto.KeyFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("CHIRM_ENCRYPTION_KEY: %w", err)
+	}
+
 	return &Config{
 		Port:             getEnv("PORT", "8080"),
 		HTTPSPort:        getEnv("HTTPS_PORT", "8443"),
@@ -63,6 +71,7 @@ func Load() (*Config, error) {
 		MaxUploadMB:      maxUploadMB,
 		AuditLogPath:     os.Getenv("AUDIT_LOG_PATH"),
 		LogRetentionDays: logRetention,
+		EncryptionKey:    encKey,
 	}, nil
 }
 

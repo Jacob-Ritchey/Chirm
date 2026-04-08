@@ -38,6 +38,11 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListMembers(w http.ResponseWriter, r *http.Request) {
+	u, err := h.currentUser(r)
+	if err != nil || u == nil || !h.store.HasPermission(u, db.PermReadMessages) {
+		errResp(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	before, limit := parsePagination(r)
 	users, err := h.store.ListUsersPaginated(before, limit+1)
 	if err != nil {
@@ -121,6 +126,10 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 // --- Roles ---
 
 func (h *Handler) ListRoles(w http.ResponseWriter, r *http.Request) {
+	_, isAdmin := h.requireAdmin(w, r)
+	if !isAdmin {
+		return
+	}
 	before, limit := parsePagination(r)
 	items, err := h.store.ListRolesPaginated(before, limit+1)
 	if err != nil {
@@ -269,7 +278,13 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusInternalServerError, "failed to create invite")
 		return
 	}
-	created(w, inv)
+	created(w, map[string]interface{}{
+		"code":       inv.Code,
+		"uses":       inv.Uses,
+		"max_uses":   inv.MaxUses,
+		"expires_at": inv.ExpiresAt,
+		"created_at": inv.CreatedAt,
+	})
 }
 
 func (h *Handler) DeleteInvite(w http.ResponseWriter, r *http.Request) {

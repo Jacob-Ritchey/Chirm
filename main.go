@@ -29,6 +29,7 @@ import (
 
 	"chirm/internal/auth"
 	"chirm/internal/config"
+	"chirm/internal/crypto"
 	"chirm/internal/db"
 	"chirm/internal/events"
 	"chirm/internal/handlers"
@@ -39,6 +40,15 @@ import (
 	"chirm/internal/router"
 )
 
+// internEncryptFile / internDecryptFile are thin shims so main.go can call
+// the crypto package without duplicating logic.
+func internEncryptFile(key *[32]byte, data []byte) ([]byte, error) {
+	return crypto.EncryptFile(key, data)
+}
+func internDecryptFile(key *[32]byte, data []byte) ([]byte, error) {
+	return crypto.DecryptFile(key, data)
+}
+
 //go:embed static
 var staticFiles embed.FS
 
@@ -48,11 +58,25 @@ func main() {
 		log.Fatal("FATAL: ", err)
 	}
 
+	// --migrate-uploads: encrypt all existing plaintext uploads then exit.
+	for _, arg := range os.Args[1:] {
+		if arg == "--migrate-uploads" {
+			if cfg.EncryptionKey == nil {
+				log.Fatal("--migrate-uploads requires CHIRM_ENCRYPTION_KEY to be set")
+			}
+			if err := migrateUploads(cfg.DataDir, cfg.EncryptionKey); err != nil {
+				log.Fatal("Migration failed:", err)
+			}
+			fmt.Println("Upload migration complete.")
+			return
+		}
+	}
+
 	if err := os.MkdirAll(cfg.DataDir+"/uploads", 0755); err != nil {
 		log.Fatal("Failed to create data directory:", err)
 	}
 
-	store, err := db.New(cfg.DataDir)
+	store, err := db.New(cfg.DataDir, cfg.EncryptionKey)
 	if err != nil {
 		log.Fatal("Failed to init database:", err)
 	}
@@ -95,7 +119,7 @@ func main() {
 		}
 	}()
 
-	h := handlers.New(store, authSvc, wsHub, bus, cfg.DataDir, cfg.AllowedOrigin)
+	h := handlers.New(store, authSvc, wsHub, bus, cfg.DataDir, cfg.AllowedOrigin, cfg.EncryptionKey)
 
 	// Initialise VAPID keys for Web Push notifications (non-fatal if it fails)
 	if err := h.InitVAPID(); err != nil {
@@ -627,4 +651,82 @@ func getLANIP() string {
 		}
 	}
 	return "localhost"
+}
+
+// migrateUploads encrypts all plaintext files in {dataDir}/uploads/ that are
+// user content (skips server_icon_*, login_bg_*, emoji_* which are public assets).
+// Files that are already encrypted are skipped. The operation is idempotent.
+func migrateUploads(dataDir string, encKey *[32]byte) error {
+	uploadsDir := filepath.Join(dataDir, "uploads")
+	entries, err := os.ReadDir(uploadsDir)
+	if err != nil {
+		return err
+	}
+
+	skippedPrefixes := []string{"server_icon_", "login_bg_", "emoji_"}
+	skipped, encrypted, failed := 0, 0, 0
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+
+		// Skip public assets.
+		isPublic := false
+		for _, pfx := range skippedPrefixes {
+			if len(name) >= len(pfx) && name[:len(pfx)] == pfx {
+				isPublic = true
+				break
+			}
+		}
+		if isPublic {
+			skipped++
+			continue
+		}
+
+		path := filepath.Join(uploadsDir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  skip %s: read error: %v\n", name, err)
+			failed++
+			continue
+		}
+
+		// Attempt decryption; if it succeeds the file is already encrypted.
+		if _, err := internDecryptFile(encKey, data); err == nil {
+			skipped++
+			continue
+		}
+
+		// File is plaintext — encrypt it.
+		blob, err := internEncryptFile(encKey, data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  skip %s: encrypt error: %v\n", name, err)
+			failed++
+			continue
+		}
+
+		// Write to a temp file then rename to avoid partial writes.
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, blob, 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "  skip %s: write error: %v\n", name, err)
+			failed++
+			continue
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			os.Remove(tmp)
+			fmt.Fprintf(os.Stderr, "  skip %s: rename error: %v\n", name, err)
+			failed++
+			continue
+		}
+		fmt.Printf("  encrypted %s\n", name)
+		encrypted++
+	}
+
+	fmt.Printf("Migration summary: %d encrypted, %d skipped, %d failed\n", encrypted, skipped, failed)
+	if failed > 0 {
+		return fmt.Errorf("%d files failed to encrypt", failed)
+	}
+	return nil
 }

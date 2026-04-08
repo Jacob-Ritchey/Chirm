@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"chirm/internal/crypto"
 )
 
 var allowedMimeTypes = map[string]bool{
@@ -104,14 +106,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	filename := fmt.Sprintf("%s%s", newID(), ext)
 	destPath := filepath.Join(h.dataDir, "uploads", filename)
 
-	dest, err := os.Create(destPath)
-	if err != nil {
-		errResp(w, http.StatusInternalServerError, "failed to save file")
-		return
-	}
-	defer dest.Close()
-
-	size, err := io.Copy(dest, file)
+	size, err := h.writeEncryptedFile(destPath, file)
 	if err != nil {
 		os.Remove(destPath)
 		errResp(w, http.StatusInternalServerError, "failed to write file")
@@ -165,7 +160,7 @@ func (h *Handler) ServeUpload(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
 	}
 
-	http.ServeFile(w, r, path)
+	h.readDecryptedFile(w, r, path)
 }
 
 // ServePublicUpload serves server-wide public assets (server icon, login background)
@@ -193,4 +188,51 @@ func newID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// writeEncryptedFile reads src into memory, optionally encrypts it, and writes
+// the result to path. Returns the plaintext byte count (for quota tracking).
+// If h.encKey is nil the file is written as-is (encryption disabled).
+func (h *Handler) writeEncryptedFile(path string, src io.Reader) (int64, error) {
+	data, err := io.ReadAll(src)
+	if err != nil {
+		return 0, err
+	}
+	plainSize := int64(len(data))
+	if h.encKey != nil {
+		data, err = crypto.EncryptFile(h.encKey, data)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return 0, err
+	}
+	return plainSize, nil
+}
+
+// readDecryptedFile serves a file that may have been written by writeEncryptedFile.
+// When h.encKey is nil it falls back to http.ServeFile (no encryption).
+// If decryption fails (legacy plaintext file) the raw bytes are served as-is,
+// allowing the server to handle a mixed encrypted/unencrypted uploads directory
+// during a migration window.
+func (h *Handler) readDecryptedFile(w http.ResponseWriter, r *http.Request, path string) {
+	if h.encKey == nil {
+		http.ServeFile(w, r, path)
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	plain, err := crypto.DecryptFile(h.encKey, data)
+	if err != nil {
+		// Legacy unencrypted file — serve raw bytes.
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.Write(data)
+		return
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(plain)))
+	w.Write(plain)
 }

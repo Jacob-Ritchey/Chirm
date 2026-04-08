@@ -116,6 +116,13 @@ func (s *Store) DeleteInvite(code string) error {
 	return err
 }
 
+// TruncateInviteChain removes the creator identity from an invite after it has
+// been used. This destroys the "who invited whom" social graph at write time.
+func (s *Store) TruncateInviteChain(code string) error {
+	_, err := s.server.Exec(`UPDATE invites SET created_by = '', creator_username = '' WHERE code = ?`, code)
+	return err
+}
+
 // CleanOrphanedAttachments deletes pending_attachments records (and their files
 // on disk) that were never linked to a message and are older than maxAge.
 func (s *Store) CleanOrphanedAttachments(uploadsDir string, maxAge time.Duration) error {

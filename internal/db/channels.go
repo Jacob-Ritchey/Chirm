@@ -8,8 +8,12 @@ func (s *Store) CreateChannel(name, description, chType, emoji, categoryID strin
 	id := NewID()
 	var pos int
 	s.server.QueryRow(`SELECT COALESCE(MAX(position), 0) + 1 FROM channels WHERE category_id = ?`, categoryID).Scan(&pos)
-	_, err := s.server.Exec(`INSERT INTO channels (id, name, description, type, position, emoji, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, name, description, chType, pos, emoji, categoryID)
+	encDesc, err := s.encryptField(id, "channel-description", description)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.server.Exec(`INSERT INTO channels (id, name, description, type, position, emoji, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, name, encDesc, chType, pos, emoji, categoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +30,11 @@ func (s *Store) GetChannelByID(id string) (*Channel, error) {
 	c := &Channel{}
 	err := s.server.QueryRow(`SELECT id, name, description, type, position, COALESCE(emoji,''), COALESCE(category_id,''), created_at FROM channels WHERE id = ?`, id).
 		Scan(&c.ID, &c.Name, &c.Description, &c.Type, &c.Position, &c.Emoji, &c.CategoryID, &c.CreatedAt)
-	return c, err
+	if err != nil {
+		return nil, err
+	}
+	c.Description = s.decryptField(c.ID, "channel-description", c.Description)
+	return c, nil
 }
 
 func (s *Store) ListChannels() ([]Channel, error) {
@@ -39,6 +47,7 @@ func (s *Store) ListChannels() ([]Channel, error) {
 	for rows.Next() {
 		var c Channel
 		rows.Scan(&c.ID, &c.Name, &c.Description, &c.Type, &c.Position, &c.Emoji, &c.CategoryID, &c.CreatedAt)
+		c.Description = s.decryptField(c.ID, "channel-description", c.Description)
 		channels = append(channels, c)
 	}
 	return channels, nil
@@ -60,13 +69,18 @@ func (s *Store) ListChannelsPaginated(before string, limit int) ([]Channel, erro
 	for rows.Next() {
 		var c Channel
 		rows.Scan(&c.ID, &c.Name, &c.Description, &c.Type, &c.Position, &c.Emoji, &c.CategoryID, &c.CreatedAt)
+		c.Description = s.decryptField(c.ID, "channel-description", c.Description)
 		channels = append(channels, c)
 	}
 	return channels, nil
 }
 
 func (s *Store) UpdateChannel(id, name, description, emoji, categoryID string) error {
-	_, err := s.server.Exec(`UPDATE channels SET name = ?, description = ?, emoji = ?, category_id = ? WHERE id = ?`, name, description, emoji, categoryID, id)
+	encDesc, err := s.encryptField(id, "channel-description", description)
+	if err != nil {
+		return err
+	}
+	_, err = s.server.Exec(`UPDATE channels SET name = ?, description = ?, emoji = ?, category_id = ? WHERE id = ?`, name, encDesc, emoji, categoryID, id)
 	return err
 }
 

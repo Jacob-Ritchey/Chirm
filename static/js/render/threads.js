@@ -370,7 +370,56 @@ export function injectThreadChip(sourceMessageId, thread) {
 
 // ─── PHASE 2: FORUM VIEW ──────────────────────────────────────────────────────
 
-export async function renderForumView(channel) {
+// Fetches a page of threads using the stable page-based API.
+async function _fetchThreadPage(channelId, page) {
+  return api.get(`/api/v1/channels/${channelId}/threads?page=${page}&per_page=20`);
+}
+
+// Builds the prev/next pagination bar. Returns null when there's only one page.
+function _renderPaginationBar(channel, page, totalPages) {
+  if (totalPages <= 1) return null;
+  const bar = document.createElement('div');
+  bar.className = 'forum-pagination';
+  bar.dataset.channelId = channel.id;
+
+  const olderBtn = document.createElement('button');
+  olderBtn.className = 'forum-page-btn';
+  olderBtn.textContent = '← Older';
+  olderBtn.disabled = page <= 1;
+  olderBtn.onclick = () => _navigateForumPage(channel, page - 1);
+
+  const info = document.createElement('span');
+  info.className = 'forum-page-info';
+  info.textContent = `Page ${page} of ${totalPages}`;
+
+  const newerBtn = document.createElement('button');
+  newerBtn.className = 'forum-page-btn';
+  newerBtn.textContent = 'Newer →';
+  newerBtn.disabled = page >= totalPages;
+  newerBtn.onclick = () => _navigateForumPage(channel, page + 1);
+
+  bar.append(olderBtn, info, newerBtn);
+  return bar;
+}
+
+async function _navigateForumPage(channel, page) {
+  if (channel.type === 'gallery') await renderGalleryView(channel, page);
+  else await renderForumView(channel, page);
+}
+
+// Re-fetches total_pages and updates the pagination bar in-place after a new post arrives.
+async function _refreshPaginationBar(channel) {
+  const meta = await _fetchThreadPage(channel.id, 1).catch(() => null);
+  if (!meta || App.currentChannel?.id !== channel.id) return;
+  App.channelTotalPages[channel.id] = meta.total_pages ?? 1;
+  const bar = document.querySelector(`.forum-pagination[data-channel-id="${channel.id}"]`);
+  if (!bar) return;
+  const newBar = _renderPaginationBar(channel, App.channelPage[channel.id] ?? 1, meta.total_pages ?? 1);
+  if (newBar) bar.replaceWith(newBar);
+  else bar.remove();
+}
+
+export async function renderForumView(channel, page = null) {
   const msgsList = document.getElementById('messages-list');
   const inputArea = document.getElementById('message-input-area');
   const typingIndicator = document.getElementById('typing-indicator');
@@ -388,11 +437,21 @@ export async function renderForumView(channel) {
   msgsList.innerHTML = '<div class="forum-loading">Loading posts…</div>';
 
   try {
-    const data = await api.get(`/api/v1/channels/${channel.id}/threads`);
+    // Default to the last page (newest content).
+    if (page === null) {
+      const meta = await _fetchThreadPage(channel.id, 1);
+      if (App.currentChannel?.id !== channel.id) return;
+      page = meta?.total_pages ?? 1;
+    }
+
+    const data = await _fetchThreadPage(channel.id, page);
     if (App.currentChannel?.id !== channel.id) return;
     const threads = data?.threads || [];
+    const totalPages = data?.total_pages ?? 1;
+    App.channelPage[channel.id] = page;
+    App.channelTotalPages[channel.id] = totalPages;
 
-    if (threads.length === 0) {
+    if (threads.length === 0 && totalPages === 1) {
       msgsList.innerHTML = `<div class="empty-state" style="padding-top:80px">
         <div class="empty-icon">📋</div>
         <h3>No posts yet</h3>
@@ -415,6 +474,9 @@ export async function renderForumView(channel) {
     }
     if (App.currentChannel?.id !== channel.id) return;
     msgsList.appendChild(container);
+
+    const bar = _renderPaginationBar(channel, page, totalPages);
+    if (bar) msgsList.appendChild(bar);
   } catch (e) {
     msgsList.innerHTML = '<div class="forum-error">Failed to load posts.</div>';
   }
@@ -604,7 +666,7 @@ export function openCreatePostModal(channel) {
 
 // ─── PHASE 3: GALLERY VIEW ────────────────────────────────────────────────────
 
-export async function renderGalleryView(channel) {
+export async function renderGalleryView(channel, page = null) {
   const msgsList = document.getElementById('messages-list');
   const inputArea = document.getElementById('message-input-area');
   const typingIndicator = document.getElementById('typing-indicator');
@@ -620,11 +682,21 @@ export async function renderGalleryView(channel) {
   msgsList.innerHTML = '<div class="forum-loading">Loading gallery…</div>';
 
   try {
-    const data = await api.get(`/api/v1/channels/${channel.id}/threads`);
+    // Default to the last page (newest content).
+    if (page === null) {
+      const meta = await _fetchThreadPage(channel.id, 1);
+      if (App.currentChannel?.id !== channel.id) return;
+      page = meta?.total_pages ?? 1;
+    }
+
+    const data = await _fetchThreadPage(channel.id, page);
     if (App.currentChannel?.id !== channel.id) return;
     const threads = data?.threads || [];
+    const totalPages = data?.total_pages ?? 1;
+    App.channelPage[channel.id] = page;
+    App.channelTotalPages[channel.id] = totalPages;
 
-    if (threads.length === 0) {
+    if (threads.length === 0 && totalPages === 1) {
       msgsList.innerHTML = `<div class="empty-state" style="padding-top:80px">
         <div class="empty-icon">🖼</div>
         <h3>No posts yet</h3>
@@ -647,6 +719,9 @@ export async function renderGalleryView(channel) {
       if (App.currentChannel?.id !== channel.id) { grid.remove(); return; }
       grid.appendChild(renderGalleryCard(thread, firstMsg));
     }
+
+    const bar = _renderPaginationBar(channel, page, totalPages);
+    if (bar) msgsList.appendChild(bar);
   } catch (e) {
     msgsList.innerHTML = '<div class="forum-error">Failed to load gallery.</div>';
   }
@@ -725,6 +800,12 @@ async function _scheduleGalleryLinkMedia(card, content) {
 
 export async function prependForumCard(channel, thread) {
   if (App.currentChannel?.id !== channel.id) return;
+  // Refresh pagination bar (updates total_pages count).
+  _refreshPaginationBar(channel);
+  // Only add the card to the DOM when the user is viewing the last (newest) page.
+  const currentPage = App.channelPage[channel.id] ?? 1;
+  const totalPages = App.channelTotalPages[channel.id] ?? 1;
+  if (currentPage < totalPages) return;
   let container = document.querySelector('.forum-posts-list');
   if (!container) {
     // First post on an empty channel — replace the empty-state with a fresh list
@@ -748,6 +829,12 @@ export async function prependForumCard(channel, thread) {
 
 export async function prependGalleryCard(channel, thread) {
   if (App.currentChannel?.id !== channel.id) return;
+  // Refresh pagination bar (updates total_pages count).
+  _refreshPaginationBar(channel);
+  // Only add the card to the DOM when the user is viewing the last (newest) page.
+  const currentPage = App.channelPage[channel.id] ?? 1;
+  const totalPages = App.channelTotalPages[channel.id] ?? 1;
+  if (currentPage < totalPages) return;
   let grid = document.querySelector('.gallery-grid');
   if (!grid) {
     // First post on an empty channel — replace the empty-state with a fresh grid

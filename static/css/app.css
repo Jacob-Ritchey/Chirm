@@ -2909,6 +2909,40 @@ pre code { background: none; border: none; padding: 0; }
 }
 .gallery-card-stats { font-size: 12px; color: rgba(255,255,255,0.8); flex-shrink: 0; }
 
+/* Forum / Gallery pagination bar */
+.forum-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px 16px;
+}
+.forum-page-btn {
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.forum-page-btn:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.forum-page-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.forum-page-info {
+  font-size: 13px;
+  color: var(--text-muted);
+  min-width: 90px;
+  text-align: center;
+}
+
 /* Gallery card: link metadata layout (site + title + description) */
 .gallery-card-link-meta {
   align-items: stretch;

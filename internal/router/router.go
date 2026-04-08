@@ -129,6 +129,7 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, store *d
 
 			// ── Admin utilities ──────────────────────────────────────────
 			r.Delete("/admin/lockout/{identifier}", h.AdminUnlockAccount)
+			r.Post("/admin/wipe", h.AdminWipe)
 
 			// ── Bot management (admin-only) ───────────────────────────────
 			r.Get("/bots", h.ListBots)

@@ -21,9 +21,13 @@ func (s *Store) CreateMessage(channelID, userID, content string, replyToID *stri
 		return nil, err
 	}
 	id := NewID()
+	encContent, err := s.encryptField(id, "message-content", content)
+	if err != nil {
+		return nil, err
+	}
 	_, err = cdb.Exec(
 		`INSERT INTO messages (id, channel_id, user_id, author_username, author_avatar, content, reply_to_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, channelID, userID, authorUsername, authorAvatar, content, replyToID)
+		id, channelID, userID, authorUsername, authorAvatar, encContent, replyToID)
 	if err != nil {
 		return nil, err
 	}
@@ -44,9 +48,13 @@ func (s *Store) CreateMessageFromBot(channelID, botID, content string, replyToID
 		return nil, err
 	}
 	id := NewID()
+	encContent, err := s.encryptField(id, "message-content", content)
+	if err != nil {
+		return nil, err
+	}
 	_, err = cdb.Exec(
 		`INSERT INTO messages (id, channel_id, bot_id, bot_name, content, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, channelID, botID, botName, content, replyToID)
+		id, channelID, botID, botName, encContent, replyToID)
 	if err != nil {
 		return nil, err
 	}
@@ -69,9 +77,13 @@ func (s *Store) CreateThreadMessage(threadID, channelID, userID, content string,
 		return nil, err
 	}
 	id := NewID()
+	encContent, err := s.encryptField(id, "message-content", content)
+	if err != nil {
+		return nil, err
+	}
 	_, err = cdb.Exec(
 		`INSERT INTO messages (id, channel_id, thread_id, user_id, author_username, author_avatar, content, reply_to_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, channelID, threadID, userID, authorUsername, authorAvatar, content, replyToID)
+		id, channelID, threadID, userID, authorUsername, authorAvatar, encContent, replyToID)
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +121,7 @@ func (s *Store) getMessageFromDB(cdb *sql.DB, id, channelID string) (*Message, e
 	if err != nil {
 		return nil, err
 	}
+	m.Content = s.decryptField(m.ID, "message-content", m.Content)
 	if userID.Valid {
 		m.UserID = userID.String
 	}
@@ -160,6 +173,7 @@ func (s *Store) getMessageRefFromDB(cdb *sql.DB, id string) (*MessageRef, error)
 	if err != nil {
 		return nil, err
 	}
+	ref.Content = s.decryptField(ref.ID, "message-content", ref.Content)
 	if authorUsername.Valid && authorUsername.String != "" {
 		ref.AuthorName = authorUsername.String
 	} else {
@@ -204,6 +218,7 @@ func (s *Store) GetMessages(channelID string, before string, limit int) ([]Messa
 		var replyToID, userID, botID sql.NullString
 		rows.Scan(&m.ID, &m.ChannelID, &userID, &botID, &m.AuthorUsername, &m.AuthorAvatar, &m.BotName,
 			&m.Content, &replyToID, &editedAt, &m.CreatedAt)
+		m.Content = s.decryptField(m.ID, "message-content", m.Content)
 		if userID.Valid {
 			m.UserID = userID.String
 		}
@@ -252,8 +267,12 @@ func (s *Store) EditMessage(id, content string) error {
 	if err != nil {
 		return err
 	}
+	encContent, err := s.encryptField(id, "message-content", content)
+	if err != nil {
+		return err
+	}
 	now := time.Now()
-	_, err = cdb.Exec(`UPDATE messages SET content = ?, edited_at = ? WHERE id = ?`, content, now, id)
+	_, err = cdb.Exec(`UPDATE messages SET content = ?, edited_at = ? WHERE id = ?`, encContent, now, id)
 	return err
 }
 
@@ -280,9 +299,13 @@ func (s *Store) DeleteMessage(id string) error {
 // until it is linked to a message via LinkAttachment.
 func (s *Store) CreateAttachment(userID, filename, originalName, mimeType string, size int64) (*Attachment, error) {
 	id := NewID()
-	_, err := s.server.Exec(
+	encOriginalName, err := s.encryptField(id, "attachment-original-name", originalName)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.server.Exec(
 		`INSERT INTO pending_attachments (id, user_id, filename, original_name, mime_type, size) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, userID, filename, originalName, mimeType, size)
+		id, userID, filename, encOriginalName, mimeType, size)
 	if err != nil {
 		return nil, err
 	}
@@ -335,6 +358,7 @@ func (s *Store) getAttachmentsFromDB(cdb *sql.DB, messageID string) ([]Attachmen
 	for rows.Next() {
 		var a Attachment
 		rows.Scan(&a.ID, &a.MessageID, &a.Filename, &a.OriginalName, &a.MimeType, &a.Size, &a.CreatedAt)
+		a.OriginalName = s.decryptField(a.ID, "attachment-original-name", a.OriginalName)
 		atts = append(atts, a)
 	}
 	return atts, nil
