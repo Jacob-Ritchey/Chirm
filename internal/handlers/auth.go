@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bufio"
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,9 +16,82 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	authpkg "chirm/internal/auth"
 	"chirm/internal/db"
 	"chirm/internal/events"
+	"chirm/internal/logger"
 )
+
+// checkPasswordPolicy validates a password against Chirm's strength requirements.
+// Returns a non-empty error message string on failure.
+func checkPasswordPolicy(password string) string {
+	if len(password) < 10 {
+		return "password must be at least 10 characters"
+	}
+	// Reject passwords that are all the same character.
+	allSame := true
+	for _, c := range password[1:] {
+		if c != rune(password[0]) {
+			allSame = false
+			break
+		}
+	}
+	if allSame {
+		return "password is too simple"
+	}
+	// Require at least one non-letter character.
+	hasNonLetter := false
+	for _, c := range password {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+			hasNonLetter = true
+			break
+		}
+	}
+	if !hasNonLetter {
+		return "password must contain at least one non-letter character"
+	}
+	return ""
+}
+
+// checkHIBP checks the password against the HaveIBeenPwned k-anonymity API.
+// Returns true if the password appears in a known breach. Silently passes on
+// network errors to avoid blocking registration when HIBP is unreachable.
+func checkHIBP(password string) bool {
+	sum := sha1.Sum([]byte(password))
+	hash := fmt.Sprintf("%X", sum)
+	prefix, suffix := hash[:5], hash[5:]
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("https://api.pwnedpasswords.com/range/" + prefix)
+	if err != nil {
+		return false // network unavailable — allow through
+	}
+	defer resp.Body.Close()
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// adminUnlockAccount allows the server owner to clear a login lockout.
+func (h *Handler) AdminUnlockAccount(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	identifier := chi.URLParam(r, "identifier")
+	if identifier == "" {
+		errResp(w, http.StatusBadRequest, "identifier required")
+		return
+	}
+	h.db.UnlockIdentifier(identifier)
+	ok(w, map[string]string{"message": "account unlocked"})
+}
 
 // Fix #11: Only allow safe, unambiguous characters in usernames.
 var validUsername = regexp.MustCompile(`^[a-zA-Z0-9_.\-]{2,32}$`)
@@ -31,19 +106,54 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check lockout before any DB lookup to prevent user enumeration via timing.
+	if locked, until := h.db.IsLocked(req.Login); locked {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(time.Until(until).Seconds())))
+		logger.Audit("login_locked", "identifier", req.Login, "ip", r.RemoteAddr)
+		errResp(w, http.StatusTooManyRequests, "account temporarily locked due to too many failed attempts")
+		return
+	}
+
 	u, err := h.db.GetUserByUsername(req.Login)
 	if err != nil {
 		u, err = h.db.GetUserByEmail(req.Login)
 		if err != nil {
+			h.db.RecordFailedLogin(req.Login)
+			logger.Audit("login_failed", "identifier", req.Login, "ip", r.RemoteAddr)
 			errResp(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
 	}
 
 	if !h.auth.CheckPassword(u.PasswordHash, req.Password) {
+		h.db.RecordFailedLogin(req.Login)
+		logger.Audit("login_failed", "identifier", req.Login, "ip", r.RemoteAddr)
 		errResp(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+
+	h.db.ClearLoginAttempts(req.Login)
+
+	// If TOTP is enabled, issue a pending session and require a second step.
+	_, totpEnabled := h.db.GetTOTPSecret(u.ID)
+	if totpEnabled {
+		pendingToken, err := h.db.CreateTOTPPendingSession(u.ID)
+		if err != nil {
+			errResp(w, http.StatusInternalServerError, "failed to create 2FA session")
+			return
+		}
+		logger.Audit("login_2fa_required", "user_id", u.ID, "ip", r.RemoteAddr)
+		// Return 202 Accepted — the client must complete the TOTP step.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":            true,
+			"data":          map[string]interface{}{"totp_required": true, "pending_token": pendingToken},
+		})
+		return
+	}
+
+	logger.Audit("login_ok", "user_id", u.ID, "ip", r.RemoteAddr)
 
 	token, err := h.auth.GenerateToken(u.ID, u.Username, u.IsOwner)
 	if err != nil {
@@ -51,7 +161,14 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refreshToken, err := h.db.CreateRefreshToken(u.ID)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+
 	setTokenCookie(w, r, token)
+	setRefreshCookie(w, r, refreshToken)
 	ok(w, map[string]interface{}{"user": u, "token": token})
 }
 
@@ -83,9 +200,18 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, "all fields required")
 		return
 	}
-	if len(req.Password) < 8 {
-		errResp(w, http.StatusBadRequest, "password must be at least 8 characters")
+	if msg := checkPasswordPolicy(req.Password); msg != "" {
+		errResp(w, http.StatusBadRequest, msg)
 		return
+	}
+
+	// HIBP check — only skip if explicitly disabled via setting.
+	hibpEnabled, _ := h.db.GetSetting("hibp_check_enabled")
+	if hibpEnabled != "0" {
+		if checkHIBP(req.Password) {
+			errResp(w, http.StatusBadRequest, "this password has appeared in a known data breach; please choose a different password")
+			return
+		}
 	}
 	if len(req.Username) < 2 || len(req.Username) > 32 {
 		errResp(w, http.StatusBadRequest, "username must be 2-32 characters")
@@ -138,14 +264,63 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refreshToken, err := h.db.CreateRefreshToken(u.ID)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+
 	h.bus.Publish(events.Event{Type: events.UserJoined, Data: events.UserJoinedData{User: u}})
 
+	logger.Audit("register_ok", "user_id", u.ID, "ip", r.RemoteAddr)
 	setTokenCookie(w, r, token)
+	setRefreshCookie(w, r, refreshToken)
 	created(w, map[string]interface{}{"user": u, "token": token})
+}
+
+// RefreshToken exchanges a valid refresh token cookie for a new access JWT
+// and rotates the refresh token (old one is invalidated, new one issued).
+func (h *Handler) RefreshToken(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("chirm_refresh")
+	if err != nil || cookie.Value == "" {
+		errResp(w, http.StatusUnauthorized, "no refresh token")
+		return
+	}
+
+	userID, newRefreshRaw, err := h.db.RotateRefreshToken(cookie.Value)
+	if err != nil {
+		errResp(w, http.StatusUnauthorized, "invalid or expired refresh token")
+		return
+	}
+
+	u, err := h.db.GetUserByID(userID)
+	if err != nil {
+		errResp(w, http.StatusUnauthorized, "user not found")
+		return
+	}
+
+	newToken, err := h.auth.GenerateToken(u.ID, u.Username, u.IsOwner)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	setTokenCookie(w, r, newToken)
+	setRefreshCookie(w, r, newRefreshRaw)
+	ok(w, map[string]interface{}{"token": newToken})
 }
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	isSecure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+
+	// Revoke refresh token stored in cookie if present.
+	if cookie, err := r.Cookie("chirm_token"); err == nil {
+		if claims, err := h.auth.ValidateToken(cookie.Value); err == nil {
+			h.db.RevokeRefreshTokensForUser(claims.UserID)
+		}
+	}
+
+	// Clear both cookies.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "chirm_token",
 		Value:    "",
@@ -155,7 +330,170 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		Secure:   isSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     "chirm_refresh",
+		Value:    "",
+		Path:     "/api/v1/auth/refresh",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   isSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
 	ok(w, map[string]string{"message": "logged out"})
+}
+
+// VerifyTOTP completes the second step of login. The client sends the
+// pending_token from the first step and a 6-digit TOTP code (or backup code).
+func (h *Handler) VerifyTOTP(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PendingToken string `json:"pending_token"`
+		Code         string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errResp(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	userID := h.db.ConsumeTOTPPendingSession(req.PendingToken)
+	if userID == "" {
+		logger.Audit("totp_verify_failed", "reason", "invalid_pending_token", "ip", r.RemoteAddr)
+		errResp(w, http.StatusUnauthorized, "invalid or expired 2FA session")
+		return
+	}
+
+	secret, enabled := h.db.GetTOTPSecret(userID)
+	if !enabled {
+		errResp(w, http.StatusBadRequest, "2FA is not enabled for this account")
+		return
+	}
+
+	valid := authpkg.ValidateTOTP(secret, req.Code)
+	if !valid {
+		// Try backup code.
+		valid = h.db.UseBackupCode(userID, strings.ToUpper(strings.ReplaceAll(req.Code, " ", "")))
+	}
+	if !valid {
+		logger.Audit("totp_verify_failed", "user_id", userID, "ip", r.RemoteAddr)
+		errResp(w, http.StatusUnauthorized, "invalid 2FA code")
+		return
+	}
+
+	u, err := h.db.GetUserByID(userID)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "user not found")
+		return
+	}
+
+	token, err := h.auth.GenerateToken(u.ID, u.Username, u.IsOwner)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+	refreshToken, err := h.db.CreateRefreshToken(u.ID)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+
+	logger.Audit("login_ok_2fa", "user_id", u.ID, "ip", r.RemoteAddr)
+	setTokenCookie(w, r, token)
+	setRefreshCookie(w, r, refreshToken)
+	ok(w, map[string]interface{}{"user": u, "token": token})
+}
+
+// SetupTOTP generates a new TOTP secret and returns the provisioning URI.
+// The secret is stored but totp_enabled remains false until confirmed.
+func (h *Handler) SetupTOTP(w http.ResponseWriter, r *http.Request) {
+	u, err := h.currentUser(r)
+	if err != nil || u == nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	secret, err := authpkg.GenerateTOTPSecret()
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to generate secret")
+		return
+	}
+
+	if err := h.db.SetTOTPSecret(u.ID, secret); err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to store secret")
+		return
+	}
+
+	uri := authpkg.TOTPProvisioningURI(secret, u.Username, "Chirm")
+	ok(w, map[string]string{"secret": secret, "uri": uri})
+}
+
+// ConfirmTOTP activates TOTP for the user after verifying a valid code.
+func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
+	u, err := h.currentUser(r)
+	if err != nil || u == nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errResp(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	secret, _ := h.db.GetTOTPSecret(u.ID)
+	if secret == "" {
+		errResp(w, http.StatusBadRequest, "run TOTP setup first")
+		return
+	}
+	if !authpkg.ValidateTOTP(secret, req.Code) {
+		errResp(w, http.StatusUnauthorized, "invalid code")
+		return
+	}
+
+	backupCodes, err := h.db.ConfirmTOTP(u.ID)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to enable 2FA")
+		return
+	}
+
+	logger.Audit("totp_enabled", "user_id", u.ID)
+	ok(w, map[string]interface{}{"backup_codes": backupCodes})
+}
+
+// DisableTOTP removes TOTP from the user's account after verifying a valid code.
+func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
+	u, err := h.currentUser(r)
+	if err != nil || u == nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errResp(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	secret, enabled := h.db.GetTOTPSecret(u.ID)
+	if !enabled {
+		errResp(w, http.StatusBadRequest, "2FA is not enabled")
+		return
+	}
+	if !authpkg.ValidateTOTP(secret, req.Code) {
+		errResp(w, http.StatusUnauthorized, "invalid code")
+		return
+	}
+
+	if err := h.db.DisableTOTP(u.ID); err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to disable 2FA")
+		return
+	}
+
+	logger.Audit("totp_disabled", "user_id", u.ID)
+	ok(w, map[string]string{"message": "2FA disabled"})
 }
 
 func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +619,7 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	avatarURL := "/uploads/" + filename
+	avatarURL := "/api/v1/uploads/" + filename
 	if err := h.db.UpdateUser(u.ID, u.Username, avatarURL); err != nil {
 		os.Remove(destPath)
 		errResp(w, http.StatusInternalServerError, "failed to update avatar")
@@ -362,7 +700,7 @@ func (h *Handler) UploadBanner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bannerURL := "/uploads/" + filename
+	bannerURL := "/api/v1/uploads/" + filename
 	if err := h.db.UpdateUserBanner(u.ID, bannerURL); err != nil {
 		os.Remove(destPath)
 		errResp(w, http.StatusInternalServerError, "failed to update banner")

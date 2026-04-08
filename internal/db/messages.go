@@ -27,14 +27,30 @@ func (d *DB) CreateMessageFromBot(channelID, botID, content string, replyToID *s
 	return d.GetMessageByID(id)
 }
 
+// CreateThreadMessage inserts a message that belongs to a thread.
+// Both channel_id (from the thread's channel) and thread_id are set.
+func (d *DB) CreateThreadMessage(threadID, channelID, userID, content string, replyToID *string) (*Message, error) {
+	id := NewID()
+	_, err := d.Exec(
+		`INSERT INTO messages (id, channel_id, thread_id, user_id, content, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, channelID, threadID, userID, content, replyToID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	d.IncrementThreadMessageCount(threadID)
+	return d.GetMessageByID(id)
+}
+
 func (d *DB) GetMessageByID(id string) (*Message, error) {
 	m := &Message{}
 	var editedAt sql.NullTime
 	var replyToID sql.NullString
+	var threadID sql.NullString
 	var userID sql.NullString
 	var botID sql.NullString
-	err := d.QueryRow(`SELECT id, channel_id, user_id, bot_id, content, reply_to_id, edited_at, created_at FROM messages WHERE id = ?`, id).
-		Scan(&m.ID, &m.ChannelID, &userID, &botID, &m.Content, &replyToID, &editedAt, &m.CreatedAt)
+	err := d.QueryRow(`SELECT id, channel_id, user_id, bot_id, content, reply_to_id, thread_id, edited_at, created_at FROM messages WHERE id = ?`, id).
+		Scan(&m.ID, &m.ChannelID, &userID, &botID, &m.Content, &replyToID, &threadID, &editedAt, &m.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -51,6 +67,9 @@ func (d *DB) GetMessageByID(id string) (*Message, error) {
 		m.ReplyToID = &replyToID.String
 		m.ReplyTo, _ = d.GetMessageRef(replyToID.String)
 	}
+	if threadID.Valid {
+		m.ThreadID = &threadID.String
+	}
 	if m.UserID != "" {
 		m.Author, _ = d.GetUserByID(m.UserID)
 	}
@@ -59,6 +78,10 @@ func (d *DB) GetMessageByID(id string) (*Message, error) {
 	}
 	m.Attachments, _ = d.GetAttachments(m.ID)
 	m.Reactions, _ = d.GetReactions(m.ID)
+	// If this message is the source of a thread, attach a ThreadRef for the frontend chip
+	if m.ThreadID == nil {
+		m.Thread, _ = d.GetThreadRefForMessage(m.ID)
+	}
 	return m, nil
 }
 
@@ -89,12 +112,13 @@ func (d *DB) GetMessages(channelID string, before string, limit int) ([]Message,
 	if before == "" {
 		rows, err = d.Query(`
 			SELECT id, channel_id, user_id, bot_id, content, reply_to_id, edited_at, created_at
-			FROM messages WHERE channel_id = ?
+			FROM messages WHERE channel_id = ? AND thread_id IS NULL
 			ORDER BY created_at DESC LIMIT ?`, channelID, limit)
 	} else {
 		rows, err = d.Query(`
 			SELECT id, channel_id, user_id, bot_id, content, reply_to_id, edited_at, created_at
-			FROM messages WHERE channel_id = ? AND created_at < (SELECT created_at FROM messages WHERE id = ?)
+			FROM messages WHERE channel_id = ? AND thread_id IS NULL
+			  AND created_at < (SELECT created_at FROM messages WHERE id = ?)
 			ORDER BY created_at DESC LIMIT ?`, channelID, before, limit)
 	}
 	if err != nil {
@@ -131,6 +155,68 @@ func (d *DB) GetMessages(channelID string, before string, limit int) ([]Message,
 		}
 		m.Attachments, _ = d.GetAttachments(m.ID)
 		m.Reactions, _ = d.GetReactions(m.ID)
+		// Attach thread chip if this message is the source of a thread
+		m.Thread, _ = d.GetThreadRefForMessage(m.ID)
+		msgs = append(msgs, m)
+	}
+	// Reverse so oldest first
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	return msgs, nil
+}
+
+// GetThreadMessages returns paginated messages belonging to a thread.
+func (d *DB) GetThreadMessages(threadID string, before string, limit int) ([]Message, error) {
+	var rows *sql.Rows
+	var err error
+	if before == "" {
+		rows, err = d.Query(`
+			SELECT id, channel_id, user_id, bot_id, content, reply_to_id, edited_at, created_at
+			FROM messages WHERE thread_id = ?
+			ORDER BY created_at DESC LIMIT ?`, threadID, limit)
+	} else {
+		rows, err = d.Query(`
+			SELECT id, channel_id, user_id, bot_id, content, reply_to_id, edited_at, created_at
+			FROM messages WHERE thread_id = ?
+			  AND created_at < (SELECT created_at FROM messages WHERE id = ?)
+			ORDER BY created_at DESC LIMIT ?`, threadID, before, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []Message
+	for rows.Next() {
+		var m Message
+		var editedAt sql.NullTime
+		var replyToID sql.NullString
+		var userID sql.NullString
+		var botID sql.NullString
+		rows.Scan(&m.ID, &m.ChannelID, &userID, &botID, &m.Content, &replyToID, &editedAt, &m.CreatedAt)
+		if userID.Valid {
+			m.UserID = userID.String
+		}
+		if botID.Valid {
+			m.BotID = &botID.String
+		}
+		if editedAt.Valid {
+			m.EditedAt = &editedAt.Time
+		}
+		if replyToID.Valid {
+			m.ReplyToID = &replyToID.String
+			m.ReplyTo, _ = d.GetMessageRef(replyToID.String)
+		}
+		if m.UserID != "" {
+			m.Author, _ = d.GetUserByID(m.UserID)
+		}
+		if m.BotID != nil {
+			m.Bot, _ = d.GetBotByID(*m.BotID)
+		}
+		m.ThreadID = &threadID
+		m.Attachments, _ = d.GetAttachments(m.ID)
+		m.Reactions, _ = d.GetReactions(m.ID)
 		msgs = append(msgs, m)
 	}
 	// Reverse so oldest first
@@ -147,6 +233,12 @@ func (d *DB) EditMessage(id, content string) error {
 }
 
 func (d *DB) DeleteMessage(id string) error {
+	// If this is a thread message, decrement the thread's message count first.
+	var threadID sql.NullString
+	d.QueryRow(`SELECT thread_id FROM messages WHERE id = ?`, id).Scan(&threadID)
+	if threadID.Valid {
+		d.DecrementThreadMessageCount(threadID.String)
+	}
 	_, err := d.Exec(`DELETE FROM messages WHERE id = ?`, id)
 	return err
 }

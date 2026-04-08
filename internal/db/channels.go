@@ -24,7 +24,7 @@ func (d *DB) GetChannelByID(id string) (*Channel, error) {
 }
 
 func (d *DB) ListChannels() ([]Channel, error) {
-	rows, err := d.Query(`SELECT id, name, description, type, position, COALESCE(emoji,''), COALESCE(category_id,''), created_at FROM channels ORDER BY category_id ASC, position ASC`)
+	rows, err := d.Query(`SELECT id, name, description, type, position, COALESCE(emoji,''), COALESCE(category_id,''), created_at FROM channels WHERE type != 'thread' ORDER BY category_id ASC, position ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -42,9 +42,9 @@ func (d *DB) ListChannelsPaginated(before string, limit int) ([]Channel, error) 
 	var rows *sql.Rows
 	var err error
 	if before == "" {
-		rows, err = d.Query(`SELECT id, name, description, type, position, COALESCE(emoji,''), COALESCE(category_id,''), created_at FROM channels ORDER BY category_id ASC, position ASC LIMIT ?`, limit)
+		rows, err = d.Query(`SELECT id, name, description, type, position, COALESCE(emoji,''), COALESCE(category_id,''), created_at FROM channels WHERE type != 'thread' ORDER BY category_id ASC, position ASC LIMIT ?`, limit)
 	} else {
-		rows, err = d.Query(`SELECT id, name, description, type, position, COALESCE(emoji,''), COALESCE(category_id,''), created_at FROM channels WHERE created_at > (SELECT created_at FROM channels WHERE id = ?) ORDER BY category_id ASC, position ASC LIMIT ?`, before, limit)
+		rows, err = d.Query(`SELECT id, name, description, type, position, COALESCE(emoji,''), COALESCE(category_id,''), created_at FROM channels WHERE type != 'thread' AND created_at > (SELECT created_at FROM channels WHERE id = ?) ORDER BY category_id ASC, position ASC LIMIT ?`, before, limit)
 	}
 	if err != nil {
 		return nil, err

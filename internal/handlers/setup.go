@@ -103,10 +103,24 @@ func setTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
 	// Secure: true caused Chrome to silently reject the cookie over plain
 	// HTTP, making login appear completely broken on :8080.
 	isSecure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	// Access token cookie — short-lived (15 min), matching the JWT expiry.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "chirm_token",
 		Value:    token,
 		Path:     "/",
+		MaxAge:   15 * 60,
+		HttpOnly: true,
+		Secure:   isSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string) {
+	isSecure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	http.SetCookie(w, &http.Cookie{
+		Name:     "chirm_refresh",
+		Value:    token,
+		Path:     "/api/v1/auth/refresh",
 		MaxAge:   30 * 24 * 3600,
 		HttpOnly: true,
 		Secure:   isSecure,

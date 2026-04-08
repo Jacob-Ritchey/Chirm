@@ -46,6 +46,17 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	maxBytes := maxMB * 1024 * 1024
 
+	// Enforce per-user storage quota if configured.
+	quotaMBStr, _ := h.db.GetSetting("storage_quota_mb")
+	if quotaMB, qErr := strconv.ParseInt(quotaMBStr, 10, 64); qErr == nil && quotaMB > 0 {
+		quotaBytes := quotaMB * 1024 * 1024
+		used := h.db.GetStorageUsed(u.ID)
+		if used >= quotaBytes {
+			errResp(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("storage quota exceeded (%dMB limit)", quotaMB))
+			return
+		}
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	if err := r.ParseMultipartForm(maxBytes); err != nil {
 		errResp(w, http.StatusBadRequest, fmt.Sprintf("file too large (max %dMB)", maxMB))
@@ -115,19 +126,22 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Track storage usage for quota enforcement.
+	h.db.AddStorageUsed(u.ID, size)
+
 	created(w, map[string]interface{}{
 		"id":            att.ID,
 		"filename":      filename,
 		"original_name": header.Filename,
 		"mime_type":     mimeType,
 		"size":          size,
-		"url":           "/uploads/" + filename,
+		"url":           "/api/v1/uploads/" + filename,
 	})
 }
 
 func (h *Handler) ServeUpload(w http.ResponseWriter, r *http.Request) {
 	filename := chi.URLParam(r, "filename")
-	// Sanitize
+	// Sanitize: strip any path traversal attempts.
 	filename = filepath.Base(filename)
 	if strings.Contains(filename, "..") {
 		http.Error(w, "invalid filename", http.StatusBadRequest)
@@ -135,10 +149,42 @@ func (h *Handler) ServeUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	path := filepath.Join(h.dataDir, "uploads", filename)
 
-	// Fix #2: Force download and prevent MIME-sniffing so browsers never
-	// execute content (especially important for any future edge-case types).
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	// Strict CSP: prevent any inline execution from served content.
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+
+	// Inline display for images/video/audio; force download for everything else.
+	ext := strings.ToLower(filepath.Ext(filename))
+	inlineExts := map[string]bool{
+		".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
+		".mp4": true, ".webm": true, ".mp3": true, ".ogg": true, ".wav": true,
+	}
+	if inlineExts[ext] {
+		w.Header().Set("Content-Disposition", "inline")
+	} else {
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	}
+
+	http.ServeFile(w, r, path)
+}
+
+// ServePublicUpload serves server-wide public assets (server icon, login background)
+// without authentication. Only filenames with the server_icon_ or login_bg_ prefix
+// are served; all others return 404, keeping user content behind auth.
+func (h *Handler) ServePublicUpload(w http.ResponseWriter, r *http.Request) {
+	filename := filepath.Base(chi.URLParam(r, "filename"))
+	if strings.Contains(filename, "..") {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(filename, "server_icon_") && !strings.HasPrefix(filename, "login_bg_") {
+		http.NotFound(w, r)
+		return
+	}
+	path := filepath.Join(h.dataDir, "uploads", filename)
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "inline")
 	http.ServeFile(w, r, path)
 }
 

@@ -79,6 +79,8 @@
       </div>
     </div>
 
+    <div id="thread-breadcrumb" class="thread-breadcrumb hidden"></div>
+
     <div id="messages-container">
       <div id="messages-list">
         <div class="empty-state" style="padding-top:120px">
@@ -112,6 +114,38 @@
         <button type="button" id="emoji-btn" onclick="openInputEmojiPicker(event)" title="Insert emoji">😊</button>
         <textarea id="message-input" rows="1" placeholder="Select a channel first…"></textarea>
         <button type="submit" id="send-btn" title="Send message">➤</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ─── THREAD PANEL ─── -->
+  <div id="thread-panel" class="thread-panel hidden">
+    <div class="thread-panel-header">
+      <div class="thread-panel-header-left">
+        <span class="thread-panel-label">Thread</span>
+        <span class="thread-panel-title"></span>
+      </div>
+      <div class="thread-panel-header-actions">
+        <button class="thread-panel-close" onclick="closeThreadPanel()" title="Close thread">✕</button>
+      </div>
+    </div>
+    <div id="thread-messages-container">
+      <div id="thread-messages-list"></div>
+    </div>
+    <div id="thread-reply-bar" style="display:none">
+      <span class="reply-bar-icon">↩ Replying to</span>
+      <span class="reply-bar-author"></span>
+      <span class="reply-bar-content"></span>
+      <button class="reply-bar-cancel" onclick="clearThreadReply()" title="Cancel reply">✕</button>
+    </div>
+    <div id="thread-upload-preview" style="display:none;padding:8px 12px 0;align-items:center;gap:10px;background:var(--bg-base)"></div>
+    <div id="thread-input-area">
+      <form id="thread-message-form">
+        <input type="file" id="thread-file-input" style="display:none" accept="image/*,video/*,audio/*,.pdf,.txt,.zip">
+        <button type="button" id="thread-attach-btn" onclick="document.getElementById('thread-file-input').click()" title="Attach file">📎</button>
+        <button type="button" id="thread-emoji-btn" onclick="openInputEmojiPicker(event, insertThreadEmoji)" title="Insert emoji">😊</button>
+        <textarea id="thread-message-input" rows="1" placeholder="Reply in thread…"></textarea>
+        <button type="submit" id="thread-send-btn" title="Send reply">➤</button>
       </form>
     </div>
   </div>

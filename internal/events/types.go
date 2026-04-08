@@ -18,6 +18,10 @@ const (
 	UserLeft            EventType = "user.left"
 	UserStatusChanged   EventType = "user.status.changed"
 	UserProfileChanged  EventType = "user.profile.changed"
+	ThreadCreated        EventType = "thread.created"
+	ThreadDeleted        EventType = "thread.deleted"
+	ThreadMessageCreated EventType = "thread.message.created"
+	ThreadMessageDeleted EventType = "thread.message.deleted"
 )
 
 // Event is the envelope passed to subscribers.
@@ -78,4 +82,29 @@ type UserProfileChangedData struct {
 	UserID   string
 	Username string
 	Avatar   string
+}
+
+type ThreadCreatedData struct {
+	Thread    *db.Thread
+	ChannelID string
+}
+
+type ThreadDeletedData struct {
+	ThreadID  string
+	ChannelID string
+}
+
+type ThreadMessageCreatedData struct {
+	Message        *db.Message
+	ThreadID       string
+	ChannelID      string
+	AuthorID       string
+	AuthorName     string
+	ContentPreview string
+}
+
+type ThreadMessageDeletedData struct {
+	MessageID string
+	ThreadID  string
+	ChannelID string
 }

@@ -142,6 +142,26 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 
+	// If this message was sent to a thread channel, also update thread counters
+	// and notify the parent channel so forum/gallery reply counts stay current.
+	if chObj != nil && chObj.Type == "thread" {
+		thread, err := h.db.GetThreadByChannelID(channelID)
+		if err == nil && thread != nil {
+			h.db.IncrementThreadMessageCount(thread.ID)
+			h.bus.Publish(events.Event{
+				Type: events.ThreadMessageCreated,
+				Data: events.ThreadMessageCreatedData{
+					Message:        msg,
+					ThreadID:       thread.ID,
+					ChannelID:      thread.ChannelID,
+					AuthorID:       authorID,
+					AuthorName:     authorName,
+					ContentPreview: contentPreview,
+				},
+			})
+		}
+	}
+
 	created(w, msg)
 }
 

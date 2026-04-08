@@ -33,6 +33,7 @@ import (
 	"chirm/internal/events"
 	"chirm/internal/handlers"
 	"chirm/internal/hub"
+	chirmlogger "chirm/internal/logger"
 	mw "chirm/internal/middleware"
 	"chirm/internal/plugin"
 	"chirm/internal/router"
@@ -63,7 +64,26 @@ func main() {
 
 	bus := events.New()
 
+	// Initialise audit logging if a path is configured.
+	if cfg.AuditLogPath != "" {
+		if err := chirmlogger.InitAudit(cfg.AuditLogPath); err != nil {
+			log.Printf("⚠ audit log init error: %v", err)
+		} else {
+			log.Printf("audit log → %s (retention: %d days)", cfg.AuditLogPath, cfg.LogRetentionDays)
+		}
+		// Prune old audit logs daily.
+		go func() {
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			dir := cfg.DataDir + "/logs"
+			for range ticker.C {
+				chirmlogger.PruneAuditLogs(dir, cfg.LogRetentionDays)
+			}
+		}()
+	}
+
 	// Fix #9: Periodically clean up orphaned attachments (uploaded but never sent).
+	// Also reconcile per-user storage counters to keep quota enforcement accurate.
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
@@ -71,6 +91,7 @@ func main() {
 			if err := database.CleanOrphanedAttachments(cfg.DataDir+"/uploads", 1*time.Hour); err != nil {
 				log.Printf("attachment cleanup error: %v", err)
 			}
+			database.ReconcileAllStorageUsed()
 		}
 	}()
 
@@ -167,8 +188,35 @@ func main() {
 			"avatar":   d.Avatar,
 		}})
 	})
+	bus.Subscribe(events.ThreadCreated, func(e events.Event) {
+		d := e.Data.(events.ThreadCreatedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "thread.new", Data: map[string]interface{}{
+			"thread":     d.Thread,
+			"channel_id": d.ChannelID,
+		}})
+	})
+	bus.Subscribe(events.ThreadDeleted, func(e events.Event) {
+		d := e.Data.(events.ThreadDeletedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "thread.delete", Data: map[string]string{
+			"thread_id":  d.ThreadID,
+			"channel_id": d.ChannelID,
+		}})
+	})
+	bus.Subscribe(events.ThreadMessageCreated, func(e events.Event) {
+		d := e.Data.(events.ThreadMessageCreatedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "thread.message.new", Data: d.Message})
+	})
+	bus.Subscribe(events.ThreadMessageDeleted, func(e events.Event) {
+		d := e.Data.(events.ThreadMessageDeletedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "thread.message.delete", Data: map[string]string{
+			"id":         d.MessageID,
+			"thread_id":  d.ThreadID,
+			"channel_id": d.ChannelID,
+		}})
+	})
 
 	r := chi.NewRouter()
+	r.Use(mw.SecurityHeaders)
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.CleanPath)
@@ -178,9 +226,6 @@ func main() {
 
 	// All API routes and WebSocket are registered by the router package.
 	router.Register(r, h, authSvc, database, authLimiter, bus, wsHub, pluginList)
-
-	// Uploaded files
-	r.Get("/uploads/{filename}", h.ServeUpload)
 
 	// CA cert download — served over plain HTTP so devices can fetch and install
 	// it before they trust the server's TLS certificate.

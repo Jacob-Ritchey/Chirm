@@ -72,6 +72,28 @@ type MessageRef struct {
 	AuthorName string `json:"author_name"`
 }
 
+// Thread represents a named sub-conversation within a channel.
+type Thread struct {
+	ID              string    `json:"id"`
+	ChannelID       string    `json:"channel_id"`
+	ThreadChannelID string    `json:"thread_channel_id,omitempty"`
+	Name            string    `json:"name"`
+	CreatorID       string    `json:"creator_id,omitempty"`
+	Creator         *User     `json:"creator,omitempty"`
+	SourceMessageID *string   `json:"source_message_id,omitempty"`
+	MessageCount    int       `json:"message_count"`
+	LastActivityAt  time.Time `json:"last_activity_at"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// ThreadRef is a compact thread reference embedded in channel messages
+// to show a "thread started" indicator on the source message.
+type ThreadRef struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	MessageCount int    `json:"message_count"`
+}
+
 // Message represents a chat message.
 type Message struct {
 	ID          string       `json:"id"`
@@ -81,6 +103,8 @@ type Message struct {
 	Content     string       `json:"content"`
 	ReplyToID   *string      `json:"reply_to_id,omitempty"`
 	ReplyTo     *MessageRef  `json:"reply_to,omitempty"`
+	ThreadID    *string      `json:"thread_id,omitempty"`
+	Thread      *ThreadRef   `json:"thread,omitempty"` // set when this msg is the source_message of a thread
 	EditedAt    *time.Time   `json:"edited_at,omitempty"`
 	CreatedAt   time.Time    `json:"created_at"`
 	Author      *User        `json:"author,omitempty"` // nil for bot messages

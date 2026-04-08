@@ -83,6 +83,45 @@ func (d *DB) ListUsers() ([]User, error) {
 	return users, nil
 }
 
+// GetStorageUsed returns how many bytes the user has used across all uploads.
+func (d *DB) GetStorageUsed(userID string) int64 {
+	var used int64
+	d.QueryRow(`SELECT COALESCE(storage_used_bytes, 0) FROM users WHERE id = ?`, userID).Scan(&used)
+	return used
+}
+
+// AddStorageUsed increments (or decrements with a negative delta) the user's
+// storage counter atomically.
+func (d *DB) AddStorageUsed(userID string, delta int64) {
+	d.Exec(`UPDATE users SET storage_used_bytes = MAX(0, storage_used_bytes + ?) WHERE id = ?`, delta, userID)
+}
+
+// ReconcileStorageUsed recomputes a user's storage_used_bytes from actual
+// attachment sizes in the database. Used by the background reconciliation job.
+func (d *DB) ReconcileStorageUsed(userID string) {
+	d.Exec(`
+		UPDATE users SET storage_used_bytes = (
+			SELECT COALESCE(SUM(a.size), 0)
+			FROM attachments a
+			JOIN messages m ON a.message_id = m.id
+			WHERE m.user_id = ?
+		) WHERE id = ?
+	`, userID, userID)
+}
+
+// ReconcileAllStorageUsed recomputes storage counters for all users in a single
+// update. Called by the background cleanup goroutine once per hour.
+func (d *DB) ReconcileAllStorageUsed() {
+	d.Exec(`
+		UPDATE users SET storage_used_bytes = (
+			SELECT COALESCE(SUM(a.size), 0)
+			FROM attachments a
+			JOIN messages m ON a.message_id = m.id
+			WHERE m.user_id = users.id
+		)
+	`)
+}
+
 func (d *DB) ListUsersPaginated(before string, limit int) ([]User, error) {
 	var rows *sql.Rows
 	var err error

@@ -133,6 +133,18 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate single-use CSRF token passed as ?csrf=<token>.
+	csrfToken := r.URL.Query().Get("csrf")
+	if csrfToken == "" {
+		http.Error(w, "missing csrf token", http.StatusForbidden)
+		return
+	}
+	ownerID := h.db.ConsumeCSRFToken(csrfToken)
+	if ownerID == "" || ownerID != claims.UserID {
+		http.Error(w, "invalid or expired csrf token", http.StatusForbidden)
+		return
+	}
+
 	upgrader := makeUpgrader(h.allowedOrigin)
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -144,6 +156,22 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 
 	go client.WritePump()
 	go client.ReadPump(h.handleWSMessage)
+}
+
+// IssueCSRFToken issues a short-lived single-use CSRF token for the current user.
+// The client must pass this as ?csrf=<token> on the WebSocket URL.
+func (h *Handler) IssueCSRFToken(w http.ResponseWriter, r *http.Request) {
+	claims := mw.GetClaims(r)
+	if claims == nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	token, err := h.db.IssueCSRFToken(claims.UserID)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to issue token")
+		return
+	}
+	ok(w, map[string]string{"token": token})
 }
 
 // VoiceRooms returns a snapshot of who is currently in each voice room.

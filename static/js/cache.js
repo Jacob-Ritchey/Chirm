@@ -4,7 +4,7 @@
 
 const ChirmCache = (() => {
   const PREFIX = 'chirm_cache_ch_';
-  const TTL_MS = 10 * 60 * 1000; // 10 minutes
+  const TTL_MS = 2 * 60 * 1000; // 2 minutes
   const MAX_MSGS_PER_CHANNEL = 100;
   const MAX_CHANNELS = 20; // max channels to keep in cache before LRU eviction
 

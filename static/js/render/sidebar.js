@@ -116,12 +116,12 @@ export function renderChannelList() {
     item.dataset.channelId = ch.id;
     item.dataset.categoryId = ch.category_id || '';
 
-    const defaultIcon = isVoice ? '🔊' : '#';
+    const defaultIcon = ch.type === 'voice' ? '🔊' : ch.type === 'forum' ? '📋' : ch.type === 'gallery' ? '🖼' : '#';
     function renderChEmoji(raw) {
       const m = raw?.match(/^:([a-zA-Z0-9_]+):$/);
       if (m) {
         const e = App.customEmojis?.find(e => e.name === m[1]);
-        if (e) return `<span class="ch-icon ch-emoji${isVoice ? ' ch-voice-emoji' : ''}"><img src="/uploads/${esc(e.filename)}" alt="${esc(raw)}" class="custom-emoji" style="width:18px;height:18px;vertical-align:middle">${isVoice ? '<span class="voice-badge">🔊</span>' : ''}</span>`;
+        if (e) return `<span class="ch-icon ch-emoji${isVoice ? ' ch-voice-emoji' : ''}"><img src="/api/v1/uploads/${esc(e.filename)}" alt="${esc(raw)}" class="custom-emoji" style="width:18px;height:18px;vertical-align:middle">${isVoice ? '<span class="voice-badge">🔊</span>' : ''}</span>`;
       }
       return `<span class="ch-icon ch-emoji${isVoice ? ' ch-voice-emoji' : ''}">${raw}${isVoice ? '<span class="voice-badge">🔊</span>' : ''}</span>`;
     }
@@ -449,6 +449,8 @@ export function openCreateChannel(defaultCategoryId = '') {
       <select id="new-ch-type" style="width:100%;padding:8px 10px;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:14px">
         <option value="text">💬 Text Channel</option>
         <option value="voice">🔊 Voice Channel</option>
+        <option value="forum">📋 Forum Channel</option>
+        <option value="gallery">🖼 Gallery Channel</option>
       </select>
     </div>
     ${catSelect}

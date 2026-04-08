@@ -16,9 +16,31 @@ func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 		var d struct {
 			ChannelID string `json:"channel_id"`
 		}
-		if json.Unmarshal(evt.Data, &d) == nil {
-			c.SetChannel(d.ChannelID)
+		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
+			return
 		}
+		// Re-validate channel existence on every subscribe (membership can change mid-session).
+		ch, err := h.db.GetChannelByID(d.ChannelID)
+		if err != nil || ch == nil {
+			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "channel not found"}})
+			return
+		}
+		c.SetChannel(d.ChannelID) // also clears threadChannelID
+
+	case "thread_subscribe":
+		var d struct {
+			ChannelID string `json:"channel_id"`
+		}
+		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
+			return
+		}
+		// Validate thread channel exists before subscribing.
+		ch, err := h.db.GetChannelByID(d.ChannelID)
+		if err != nil || ch == nil {
+			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "channel not found"}})
+			return
+		}
+		c.SetThreadChannel(d.ChannelID)
 
 	case "typing":
 		var d struct {

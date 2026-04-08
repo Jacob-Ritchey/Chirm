@@ -259,10 +259,45 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ login, password }),
       });
-      const data = await res.json();
-      if (!res.ok) { showError(data.error || 'Login failed'); return; }
+      const body = await res.json();
+      if (res.status === 429) { showError(body.error?.message || 'Account temporarily locked. Try again later.'); return; }
+      if (!res.ok) { showError(body.error?.message || 'Login failed'); return; }
+      // 202 Accepted means TOTP is required.
+      if (res.status === 202 && body.data?.totp_required) {
+        showTOTPPrompt(body.data.pending_token);
+        return;
+      }
       window.location.href = '/';
     } catch (e) { showError('Network error. Is the server running?'); }
+  }
+
+  function showTOTPPrompt(pendingToken) {
+    // Show a simple inline TOTP entry form.
+    const loginForm = document.getElementById('login-form') || document.querySelector('.auth-form');
+    const totpHtml = `
+      <div id="totp-step">
+        <p style="margin-bottom:12px;color:var(--text-secondary)">Enter the 6-digit code from your authenticator app.</p>
+        <input id="totp-code" type="text" inputmode="numeric" maxlength="10" placeholder="000000"
+          style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-size:1.2em;text-align:center;letter-spacing:0.2em;">
+        <button onclick="submitTOTP('${pendingToken}')" style="width:100%;margin-top:12px;padding:10px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:1em;">Verify</button>
+      </div>`;
+    if (loginForm) loginForm.innerHTML = totpHtml;
+    setTimeout(() => document.getElementById('totp-code')?.focus(), 50);
+  }
+
+  async function submitTOTP(pendingToken) {
+    const code = document.getElementById('totp-code')?.value?.trim();
+    if (!code) return;
+    try {
+      const res = await fetch('/api/v1/auth/totp', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pending_token: pendingToken, code }),
+      });
+      const body = await res.json();
+      if (!res.ok) { showError(body.error?.message || 'Invalid code'); return; }
+      window.location.href = '/';
+    } catch (e) { showError('Network error'); }
   }
 
   // Fix 5: Agreement popup
@@ -287,7 +322,7 @@
     const invite_code = document.getElementById('reg-invite').value.trim();
 
     if (!username || !email || !password) { showError('Please fill in all fields.'); return; }
-    if (password.length < 8) { showError('Password must be at least 8 characters.'); return; }
+    if (password.length < 10) { showError('Password must be at least 10 characters.'); return; }
 
     // Fix 5: Show agreement if enabled and not yet accepted this session
     if (_settings.agreement_enabled === '1' && !_agreementAccepted) {
@@ -302,7 +337,7 @@
         body: JSON.stringify({ username, email, password, invite_code }),
       });
       const data = await res.json();
-      if (!res.ok) { showError(data.error || 'Registration failed'); _agreementAccepted = false; return; }
+      if (!res.ok) { showError(data.error?.message || 'Registration failed'); _agreementAccepted = false; return; }
 
       // Show avatar upload step
       showAvatarStep(username);

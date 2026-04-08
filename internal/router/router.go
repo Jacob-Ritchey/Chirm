@@ -30,12 +30,18 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 		http.Redirect(w, r, newPath, http.StatusPermanentRedirect)
 	})
 
+	// Public file serving for server-wide assets (server icon, login background).
+	// User content (avatars, attachments, emojis) stays behind /api/v1/uploads/ with auth.
+	r.Get("/uploads/{filename}", h.ServePublicUpload)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// ── Public endpoints ──────────────────────────────────────────────
 		r.Get("/setup/status", h.SetupStatus)
 		r.Post("/setup", h.Setup)
 		r.With(authLimiter).Post("/auth/login", h.Login)
 		r.With(authLimiter).Post("/auth/register", h.Register)
+		r.Post("/auth/refresh", h.RefreshToken)
+		r.With(authLimiter).Post("/auth/totp", h.VerifyTOTP)
 		r.Post("/auth/logout", h.Logout)
 		r.Get("/join/{code}", h.JoinWithInvite)
 		r.Get("/public-settings", h.GetPublicSettings)
@@ -44,7 +50,12 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 		r.Group(func(r chi.Router) {
 			r.Use(mw.Auth(authSvc, database))
 
+			r.Get("/auth/csrf", h.IssueCSRFToken)
+
 			r.Get("/me", h.GetMe)
+			r.Post("/me/totp/setup", h.SetupTOTP)
+			r.Post("/me/totp/confirm", h.ConfirmTOTP)
+			r.Delete("/me/totp", h.DisableTOTP)
 			r.Put("/me", h.UpdateMe)
 			r.Post("/me/avatar", h.UploadAvatar)
 			r.Post("/me/banner", h.UploadBanner)
@@ -69,6 +80,13 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 			r.Post("/messages/{id}/reactions", h.AddReaction)
 			r.Delete("/messages/{id}/reactions", h.RemoveReaction)
 
+			r.Get("/channels/{id}/threads", h.ListThreads)
+			r.Post("/channels/{id}/threads", h.CreateThread)
+			r.Delete("/threads/{id}", h.DeleteThread)
+			r.Get("/threads/{id}/first-message", h.GetThreadFirstMessage)
+			r.Get("/threads/{id}/messages", h.GetThreadMessages)
+			r.Post("/threads/{id}/messages", h.SendThreadMessage)
+
 			r.Get("/emojis", h.ListCustomEmojis)
 			r.Post("/emojis", h.UploadCustomEmoji)
 			r.Delete("/emojis/{id}", h.DeleteCustomEmoji)
@@ -76,6 +94,7 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 			r.Get("/link-preview", h.LinkPreview)
 
 			r.Post("/upload", h.Upload)
+			r.Get("/uploads/{filename}", h.ServeUpload)
 
 			r.Get("/users", h.ListUsers)
 			r.Get("/users/{id}", h.GetUserProfile)
@@ -107,6 +126,9 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 			r.Post("/push/unsubscribe", h.RemovePushSubscription)
 			r.Get("/push/poll", h.PollUnread)
 			r.Post("/push/test", h.TestPush)
+
+			// ── Admin utilities ──────────────────────────────────────────
+			r.Delete("/admin/lockout/{identifier}", h.AdminUnlockAccount)
 
 			// ── Bot management (admin-only) ───────────────────────────────
 			r.Get("/bots", h.ListBots)

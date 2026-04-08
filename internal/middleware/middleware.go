@@ -10,6 +10,24 @@ import (
 	"chirm/internal/db"
 )
 
+// SecurityHeaders adds the required security headers to every response.
+// The CSP is set to report-only mode initially to avoid breaking existing
+// inline event handlers — switch to Content-Security-Policy once the
+// inline handler audit is complete.
+func SecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		h.Set("Content-Security-Policy-Report-Only",
+			"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' wss: ws:; media-src 'self' blob:; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
 type contextKey string
 
 const (

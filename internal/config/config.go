@@ -11,14 +11,16 @@ import (
 // Config holds all runtime configuration for Chirm.
 // Values are loaded from environment variables (with .env file support).
 type Config struct {
-	Port          string
-	HTTPSPort     string
-	DataDir       string
-	JWTSecret     string
-	AllowedOrigin string
-	TLSCert       string
-	TLSKey        string
-	MaxUploadMB   int64
+	Port             string
+	HTTPSPort        string
+	DataDir          string
+	JWTSecret        string
+	AllowedOrigin    string
+	TLSCert          string
+	TLSKey           string
+	MaxUploadMB      int64
+	AuditLogPath     string // path to audit log file; empty disables audit logging
+	LogRetentionDays int    // how many days to keep audit logs (default 7)
 }
 
 // Load reads the .env file (if present) then populates Config from environment variables.
@@ -43,15 +45,24 @@ func Load() (*Config, error) {
 		}
 	}
 
+	logRetention := 7
+	if v := os.Getenv("LOG_RETENTION_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			logRetention = n
+		}
+	}
+
 	return &Config{
-		Port:          getEnv("PORT", "8080"),
-		HTTPSPort:     getEnv("HTTPS_PORT", "8443"),
-		DataDir:       getEnv("DATA_DIR", "./data"),
-		JWTSecret:     jwtSecret,
-		AllowedOrigin: os.Getenv("ALLOWED_ORIGIN"),
-		TLSCert:       os.Getenv("CHIRM_TLS_CERT"),
-		TLSKey:        os.Getenv("CHIRM_TLS_KEY"),
-		MaxUploadMB:   maxUploadMB,
+		Port:             getEnv("PORT", "8080"),
+		HTTPSPort:        getEnv("HTTPS_PORT", "8443"),
+		DataDir:          getEnv("DATA_DIR", "./data"),
+		JWTSecret:        jwtSecret,
+		AllowedOrigin:    os.Getenv("ALLOWED_ORIGIN"),
+		TLSCert:          os.Getenv("CHIRM_TLS_CERT"),
+		TLSKey:           os.Getenv("CHIRM_TLS_KEY"),
+		MaxUploadMB:      maxUploadMB,
+		AuditLogPath:     os.Getenv("AUDIT_LOG_PATH"),
+		LogRetentionDays: logRetention,
 	}, nil
 }
 

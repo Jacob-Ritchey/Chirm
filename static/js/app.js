@@ -47,6 +47,17 @@ import {
   openCreateChannel, openEditChannel, confirmDeleteChannel,
   openCreateCategory, openEditCategory, confirmDeleteCategory,
 } from './render/sidebar.js';
+import {
+  openThreadPanel, closeThreadPanel, renderThreadMessages,
+  appendThreadMessage, removeThreadMessage,
+  openStartThreadModal, openThreadById,
+  updateThreadChipInDOM, injectThreadChip,
+  sendThreadMessage, onThreadInputKeydown,
+  renderForumView, renderGalleryView, openCreatePostModal,
+  setThreadReply, clearThreadReply, insertThreadEmoji,
+  handleThreadUpload, clearThreadUploadPreview,
+  prependForumCard, prependGalleryCard,
+} from './render/threads.js';
 
 // ─── DATA LOADING ─────────────────────────────────────────────────────────────
 
@@ -96,6 +107,7 @@ function _loadStructCache() {
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 async function init() {
+
   const status = await api.get('/api/v1/setup/status').catch(() => null);
   if (status?.setup_done === false) {
     window.location.href = '/setup';
@@ -140,7 +152,6 @@ async function init() {
   }
 
   // Phase 2 — non-essential: load members, roles, emojis, voice in background.
-  // Members list may already be populated from the struct cache; this refreshes it.
   Promise.all([loadMembers(), loadRoles(), loadVoiceRooms(), loadCustomEmojis()])
     .then(() => {
       renderMembersList();
@@ -160,8 +171,55 @@ async function init() {
   }, 3000);
 }
 
+// ─── THREAD BREADCRUMB ────────────────────────────────────────────────────────
+
+function _renderThreadBreadcrumb(currentCh) {
+  const bar = document.getElementById('thread-breadcrumb');
+  if (!bar) return;
+  bar.innerHTML = '';
+  bar.classList.remove('hidden');
+
+  (App.threadNavStack || []).forEach((entry, i) => {
+    const item = document.createElement('span');
+    item.className = 'breadcrumb-item';
+    const prefix = (entry.type === 'text' || entry.type === 'forum' || entry.type === 'gallery') ? '#' : '';
+    item.textContent = prefix + entry.name;
+    item.onclick = () => _navigateToBreadcrumb(i);
+    bar.appendChild(item);
+
+    const sep = document.createElement('span');
+    sep.className = 'breadcrumb-sep';
+    sep.textContent = ' ›';
+    bar.appendChild(sep);
+  });
+
+  const current = document.createElement('span');
+  current.className = 'breadcrumb-current';
+  current.textContent = currentCh.name;
+  bar.appendChild(current);
+}
+
+function _clearThreadBreadcrumb() {
+  const bar = document.getElementById('thread-breadcrumb');
+  if (bar) bar.classList.add('hidden');
+}
+
+async function _navigateToBreadcrumb(index) {
+  const entry = App.threadNavStack[index];
+  if (!entry) return;
+  App.threadNavStack = App.threadNavStack.slice(0, index);
+  await openChannel({ id: entry.id, name: entry.name, type: entry.type });
+  if (entry.thread) openThreadPanel(entry.thread);
+}
+
 // ─── CHANNELS ─────────────────────────────────────────────────────────────────
 async function openChannel(ch) {
+  // ── Clear thread breadcrumb when leaving thread channels ──────────────
+  if (ch.type !== 'thread') {
+    App.threadNavStack = [];
+    _clearThreadBreadcrumb();
+  }
+
   // ── Voice channel ──────────────────────────────────────────────────────
   if (ch.type === 'voice') {
     if (Voice.isInChannel(ch.id)) {
@@ -183,10 +241,50 @@ async function openChannel(ch) {
     return;
   }
 
+  // ── Close thread panel if switching channels ───────────────────────────
+  if (App.currentThread && App.currentThread.channel_id !== ch.id) {
+    closeThreadPanel();
+  }
+
+  // ── Forum / Gallery channels ───────────────────────────────────────────
+  if (ch.type === 'forum' || ch.type === 'gallery') {
+    App.currentChannel = ch;
+    App.unread.delete(ch.id);
+    _persistUnread();
+    _saveLastChannel(ch.id);
+
+    if (PanelMgr.isMobile()) PanelMgr.close('channels');
+
+    document.querySelectorAll('.channel-item').forEach(el => {
+      const id = el.dataset.channelId;
+      el.classList.toggle('active', id === ch.id);
+      if (id === ch.id) el.classList.remove('unread');
+    });
+
+    document.getElementById('ch-title').textContent = ch.name;
+    document.getElementById('ch-desc').textContent = ch.description || '';
+
+    // Remove "New Post" button from a previous forum/gallery channel
+    document.querySelector('.new-post-btn')?.remove();
+
+    WS.subscribe(ch.id);
+
+    if (ch.type === 'gallery') {
+      await renderGalleryView(ch);
+    } else {
+      await renderForumView(ch);
+    }
+    return;
+  }
+
   // ── Text channel ───────────────────────────────────────────────────────
-  document.getElementById('messages-container').style.display = '';
+  // Restore channel-specific UI that may have been hidden by forum/gallery view
   document.getElementById('message-input-area').style.display = '';
   document.getElementById('typing-indicator').style.display = '';
+  // Remove "New Post" button if we're leaving a forum/gallery channel
+  document.querySelector('.new-post-btn')?.remove();
+
+  document.getElementById('messages-container').style.display = '';
 
   const main = document.getElementById('main');
   const voicePanel = document.getElementById('voice-panel');
@@ -220,13 +318,17 @@ async function openChannel(ch) {
 
   WS.subscribe(ch.id);
 
+  if (ch.type === 'thread') {
+    _renderThreadBreadcrumb(ch);
+  }
+
   const channelId = ch.id;
   if (!App.messages[channelId]) App.messages[channelId] = [];
   renderMessages(channelId);
 
   const cached = typeof ChirmCache !== 'undefined' ? ChirmCache.get(channelId) : null;
 
-  if (cached && cached.messages.length > 0) {
+  if (cached && cached.fresh && cached.messages.length > 0) {
     App.messages[channelId] = [...cached.messages];
     renderMessages(channelId);
     scrollToBottom(true);
@@ -247,8 +349,13 @@ async function openChannel(ch) {
     App.messages[channelId] = merged;
     if (typeof ChirmCache !== 'undefined') ChirmCache.set(channelId, merged);
 
-    const cachedCount = cached?.messages?.length ?? 0;
-    if (merged.length !== cachedCount || wsOnlyMsgs.length > 0 || !cached) {
+    const cachedTailIds = (cached?.messages || []).slice(-5).map(m => m.id).join(',');
+    const mergedTailIds = merged.slice(-5).map(m => m.id).join(',');
+    const needsRerender = !cached || !cached.fresh
+      || merged.length !== (cached.messages?.length ?? 0)
+      || wsOnlyMsgs.length > 0
+      || cachedTailIds !== mergedTailIds;
+    if (needsRerender) {
       renderMessages(channelId);
       scrollToBottom(true);
     }
@@ -257,6 +364,19 @@ async function openChannel(ch) {
 
 // ─── WEBSOCKET HANDLERS ───────────────────────────────────────────────────────
 function setupWSHandlers() {
+  // On reconnect (not the initial connect), refresh structural data and invalidate
+  // the message cache — we may have missed channel/settings/message events while down.
+  let _wsHasConnectedOnce = false;
+  WS.on('ws.connected', async () => {
+    if (!_wsHasConnectedOnce) { _wsHasConnectedOnce = true; return; }
+    ChirmCache.clearAll();
+    await Promise.all([loadChannels(), loadPublicSettings()]).catch(() => {});
+    ChirmTheme.loadServerTheme(App.publicSettings);
+    renderServerHeader();
+    renderChannelList();
+    _saveStructCache();
+  });
+
   WS.on('message.activity', (data) => {
     if (!data || !data.channel_id) return;
     const channelId = data.channel_id;
@@ -285,8 +405,27 @@ function setupWSHandlers() {
   });
 
   WS.on('message.new', (msg) => {
+    // Route to thread panel if message belongs to the open thread's channel
+    if (App.currentThread?.thread_channel_id && msg.channel_id === App.currentThread.thread_channel_id) {
+      appendThreadMessage(msg);
+      return;
+    }
+
     const channelId = msg.channel_id;
     if (!App.messages[channelId]) App.messages[channelId] = [];
+
+    // Resolve a pending placeholder if this is our own message echoed back
+    if (msg.user_id === App.user?.id) {
+      const pendingIdx = App.messages[channelId].findIndex(m => m.pending);
+      if (pendingIdx >= 0) {
+        const pendingId = App.messages[channelId][pendingIdx].id;
+        App.messages[channelId][pendingIdx] = msg;
+        if (typeof ChirmCache !== 'undefined') ChirmCache.appendMessage(channelId, msg);
+        const pendingEl = document.querySelector(`[data-message-id="${pendingId}"]`);
+        if (pendingEl) pendingEl.replaceWith(renderMessage(msg, pendingEl.classList.contains('continued')));
+        return;
+      }
+    }
 
     if (App.messages[channelId].find(m => m.id === msg.id)) return;
 
@@ -364,9 +503,8 @@ function setupWSHandlers() {
       if (msg) msg.reactions = reactions;
     }
     if (typeof ChirmCache !== 'undefined') ChirmCache.updateReactions(channel_id, message_id, reactions);
-    if (App.currentChannel?.id === channel_id) {
-      updateReactionsInDOM(message_id, reactions);
-    }
+    // Always call — handles both channel and thread messages; DOM guard is inside the function
+    updateReactionsInDOM(message_id, reactions);
   });
 
   WS.on('emoji.new', (emoji) => {
@@ -382,6 +520,7 @@ function setupWSHandlers() {
   WS.on('channel.new', (ch) => {
     App.channels.push(ch);
     renderChannelList();
+    _saveStructCache();
   });
 
   WS.on('channel.update', (ch) => {
@@ -393,6 +532,7 @@ function setupWSHandlers() {
       document.getElementById('ch-desc').textContent = ch.description || '';
     }
     renderChannelList();
+    _saveStructCache();
   });
 
   WS.on('channel.delete', ({ id }) => {
@@ -403,27 +543,32 @@ function setupWSHandlers() {
       if (App.channels.length) openChannel(App.channels[0]);
     }
     renderChannelList();
+    _saveStructCache();
   });
 
   WS.on('channels.reorder', (channels) => {
     App.channels = channels;
     renderChannelList();
+    _saveStructCache();
   });
 
   WS.on('category.new', (cat) => {
     App.categories.push(cat);
     renderChannelList();
+    _saveStructCache();
   });
 
   WS.on('categories.update', (cats) => {
     App.categories = cats;
     renderChannelList();
+    _saveStructCache();
   });
 
   WS.on('category.delete', ({ id, channels }) => {
     App.categories = App.categories.filter(c => c.id !== id);
     if (channels) App.channels = channels;
     renderChannelList();
+    _saveStructCache();
   });
 
   WS.on('member.new', (member) => {
@@ -485,6 +630,53 @@ function setupWSHandlers() {
       }
     }
     renderChannelList();
+  });
+
+  WS.on('thread.new', ({ thread, channel_id }) => {
+    if (!thread) return;
+    // If viewing the channel this thread belongs to, inject a chip on the source message
+    if (App.currentChannel?.id === channel_id && thread.source_message_id) {
+      injectThreadChip(thread.source_message_id, thread);
+    }
+    // If viewing a forum/gallery channel, prepend just the new card (avoids full re-render race)
+    if (App.currentChannel?.id === channel_id) {
+      const ch = App.currentChannel;
+      if (ch.type === 'forum') prependForumCard(ch, thread);
+      else if (ch.type === 'gallery') prependGalleryCard(ch, thread);
+    }
+  });
+
+  WS.on('thread.delete', ({ thread_id, channel_id }) => {
+    // Close panel if the deleted thread is currently open
+    if (App.currentThread?.id === thread_id) closeThreadPanel();
+    // Remove from forum/gallery view if applicable
+    document.querySelector(`[data-thread-id="${thread_id}"]`)?.remove();
+    // Remove thread chip from source message
+    document.querySelector(`.msg-thread-chip[data-thread-id="${thread_id}"]`)?.remove();
+  });
+
+  WS.on('thread.message.new', (msg) => {
+    if (!msg || !msg.thread_id) return;
+    appendThreadMessage(msg);
+    // Update thread chip count on source message
+    const threadId = msg.thread_id;
+    if (App.threadMessages[threadId]) {
+      const count = App.threadMessages[threadId].length;
+      updateThreadChipInDOM(threadId, count);
+    }
+    // Update reply count on forum/gallery post card
+    if (App.currentChannel?.type === 'forum' || App.currentChannel?.type === 'gallery') {
+      const card = document.querySelector(`[data-thread-id="${threadId}"] .fpc-reply-count`);
+      if (card) {
+        const current = parseInt(card.textContent, 10) || 0;
+        card.textContent = current + 1;
+      }
+    }
+  });
+
+  WS.on('thread.message.delete', ({ id, thread_id, channel_id }) => {
+    if (!thread_id) return;
+    removeThreadMessage(id, thread_id);
   });
 }
 
@@ -692,11 +884,28 @@ document.addEventListener('DOMContentLoaded', () => {
   const form = document.getElementById('message-form');
   form.addEventListener('submit', (e) => { e.preventDefault(); sendMessage(); });
 
+  // Thread panel input
+  const threadInput = document.getElementById('thread-message-input');
+  if (threadInput) {
+    threadInput.addEventListener('keydown', onThreadInputKeydown);
+    threadInput.addEventListener('input', () => resizeInput(threadInput));
+  }
+  const threadForm = document.getElementById('thread-message-form');
+  if (threadForm) threadForm.addEventListener('submit', (e) => { e.preventDefault(); sendThreadMessage(); });
+
   const fileInput = document.getElementById('file-input');
   fileInput.addEventListener('change', () => {
     if (fileInput.files[0]) handleFileUpload(fileInput.files[0]);
     fileInput.value = '';
   });
+
+  const threadFileInput = document.getElementById('thread-file-input');
+  if (threadFileInput) {
+    threadFileInput.addEventListener('change', () => {
+      if (threadFileInput.files[0]) handleThreadUpload(threadFileInput.files[0]);
+      threadFileInput.value = '';
+    });
+  }
 
   const mc = document.getElementById('messages-container');
   mc.addEventListener('dragover', (e) => { e.preventDefault(); mc.style.outline = '2px dashed var(--accent)'; });
@@ -754,7 +963,15 @@ window.clearUploadPreview = clearUploadPreview;
 
 // Messages
 window.clearReply           = clearReply;
-window.setReply             = setReply;
+// Route setReply to thread panel when clicking reply on a thread message
+window.setReply = (msgId, authorName, content) => {
+  const msgInThread = document.querySelector(`#thread-messages-list [data-message-id="${msgId}"]`);
+  if (msgInThread && App.currentThread) {
+    setThreadReply(msgId, authorName, content);
+  } else {
+    setReply(msgId, authorName, content);
+  }
+};
 window.openEmojiPicker      = openEmojiPicker;
 window.openInputEmojiPicker = openInputEmojiPicker;
 window.editMessage          = editMessage;
@@ -764,6 +981,17 @@ window.toggleReaction       = toggleReaction;
 window.switchEmojiTab       = switchEmojiTab;
 window.filterEmojis         = filterEmojis;
 window.selectEmoji          = selectEmoji;
+
+// Threads
+window.openStartThreadModal      = openStartThreadModal;
+window.openThreadById            = openThreadById;
+window.closeThreadPanel          = closeThreadPanel;
+window.sendThreadMessage         = sendThreadMessage;
+window.onThreadInputKeydown      = onThreadInputKeydown;
+window.setThreadReply            = setThreadReply;
+window.clearThreadReply          = clearThreadReply;
+window.insertThreadEmoji         = insertThreadEmoji;
+window.clearThreadUploadPreview  = clearThreadUploadPreview;
 
 // Sidebar
 window.renderServerHeader    = renderServerHeader;

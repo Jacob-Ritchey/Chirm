@@ -83,7 +83,7 @@ export function renderContent(content) {
     // Check custom server emojis
     const custom = App.customEmojis?.find(e => e.name === name.toLowerCase());
     if (custom) {
-      return `<img class="custom-emoji" src="/uploads/${esc(custom.filename)}" alt=":${esc(name)}:" title=":${esc(name)}:">`;
+      return `<img class="custom-emoji" src="/api/v1/uploads/${esc(custom.filename)}" alt=":${esc(name)}:" title=":${esc(name)}:">`;
     }
     // Check standard shortcodes
     const std = EMOJI_SHORTCODES[name] || EMOJI_SHORTCODES[name.toLowerCase()];
