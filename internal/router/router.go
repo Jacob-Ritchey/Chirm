@@ -17,9 +17,9 @@ import (
 // Register mounts the WebSocket endpoint and all REST API routes under /api/v1/.
 // A 308 redirect from the legacy /api/* prefix is also installed so existing
 // clients continue to work during the migration period.
-func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database *db.DB, authLimiter func(http.Handler) http.Handler, bus *events.Bus, wsHub *hub.Hub, plugins []plugin.Plugin) {
+func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, store *db.Store, authLimiter func(http.Handler) http.Handler, bus *events.Bus, wsHub *hub.Hub, plugins []plugin.Plugin) {
 	// WebSocket — not versioned, lives outside /api/v1/.
-	r.With(mw.Auth(authSvc, database)).Get("/ws", h.WebSocket)
+	r.With(mw.Auth(authSvc, store)).Get("/ws", h.WebSocket)
 
 	// Legacy redirect: /api/<path> → /api/v1/<path> (308 preserves HTTP method).
 	r.HandleFunc("/api/*", func(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +48,7 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 
 		// ── Authenticated endpoints ───────────────────────────────────────
 		r.Group(func(r chi.Router) {
-			r.Use(mw.Auth(authSvc, database))
+			r.Use(mw.Auth(authSvc, store))
 
 			r.Get("/auth/csrf", h.IssueCSRFToken)
 
@@ -144,7 +144,7 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 					ctx := plugin.PluginContext{
 						Bus:    bus,
 						Hub:    wsHub,
-						DB:     database,
+						DB:     store,
 						Router: sub,
 					}
 					if err := p.Init(ctx); err != nil {

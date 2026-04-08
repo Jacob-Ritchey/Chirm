@@ -14,7 +14,7 @@ func (h *Handler) ListBots(w http.ResponseWriter, r *http.Request) {
 	if !isAdmin {
 		return
 	}
-	bots, err := h.db.ListBots()
+	bots, err := h.store.ListBots()
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list bots")
 		return
@@ -42,7 +42,7 @@ func (h *Handler) CreateBot(w http.ResponseWriter, r *http.Request) {
 		req.Permissions = 3 // PermReadMessages | PermSendMessages
 	}
 	// CreateBot returns the bot with its token (only time it is exposed)
-	bot, err := h.db.CreateBot(req.Name, req.Permissions)
+	bot, err := h.store.CreateBot(req.Name, req.Permissions)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create bot")
 		return
@@ -64,11 +64,14 @@ func (h *Handler) UpdateBot(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if err := h.db.UpdateBot(id, req.Name, req.Permissions); err != nil {
+	if err := h.store.UpdateBot(id, req.Name, req.Permissions); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to update bot")
 		return
 	}
-	bot, _ := h.db.GetBotByID(id)
+	bot, _ := h.store.GetBotByID(id)
+	if req.Name != "" {
+		go h.store.PropagateBotRename(id, req.Name)
+	}
 	ok(w, bot)
 }
 
@@ -78,7 +81,7 @@ func (h *Handler) DeleteBot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
-	if err := h.db.DeleteBot(id); err != nil {
+	if err := h.store.DeleteBot(id); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to delete bot")
 		return
 	}
@@ -91,7 +94,7 @@ func (h *Handler) RegenerateBotToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
-	bot, err := h.db.RegenerateBotToken(id)
+	bot, err := h.store.RegenerateBotToken(id)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to regenerate token")
 		return

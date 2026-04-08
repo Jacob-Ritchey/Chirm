@@ -89,7 +89,7 @@ func (h *Handler) AdminUnlockAccount(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, "identifier required")
 		return
 	}
-	h.db.UnlockIdentifier(identifier)
+	h.store.UnlockIdentifier(identifier)
 	ok(w, map[string]string{"message": "account unlocked"})
 }
 
@@ -107,18 +107,18 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check lockout before any DB lookup to prevent user enumeration via timing.
-	if locked, until := h.db.IsLocked(req.Login); locked {
+	if locked, until := h.store.IsLocked(req.Login); locked {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(time.Until(until).Seconds())))
 		logger.Audit("login_locked", "identifier", req.Login, "ip", r.RemoteAddr)
 		errResp(w, http.StatusTooManyRequests, "account temporarily locked due to too many failed attempts")
 		return
 	}
 
-	u, err := h.db.GetUserByUsername(req.Login)
+	u, err := h.store.GetUserByUsername(req.Login)
 	if err != nil {
-		u, err = h.db.GetUserByEmail(req.Login)
+		u, err = h.store.GetUserByEmail(req.Login)
 		if err != nil {
-			h.db.RecordFailedLogin(req.Login)
+			h.store.RecordFailedLogin(req.Login)
 			logger.Audit("login_failed", "identifier", req.Login, "ip", r.RemoteAddr)
 			errResp(w, http.StatusUnauthorized, "invalid credentials")
 			return
@@ -126,18 +126,18 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.auth.CheckPassword(u.PasswordHash, req.Password) {
-		h.db.RecordFailedLogin(req.Login)
+		h.store.RecordFailedLogin(req.Login)
 		logger.Audit("login_failed", "identifier", req.Login, "ip", r.RemoteAddr)
 		errResp(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	h.db.ClearLoginAttempts(req.Login)
+	h.store.ClearLoginAttempts(req.Login)
 
 	// If TOTP is enabled, issue a pending session and require a second step.
-	_, totpEnabled := h.db.GetTOTPSecret(u.ID)
+	_, totpEnabled := h.store.GetTOTPSecret(u.ID)
 	if totpEnabled {
-		pendingToken, err := h.db.CreateTOTPPendingSession(u.ID)
+		pendingToken, err := h.store.CreateTOTPPendingSession(u.ID)
 		if err != nil {
 			errResp(w, http.StatusInternalServerError, "failed to create 2FA session")
 			return
@@ -161,7 +161,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refreshToken, err := h.db.CreateRefreshToken(u.ID)
+	refreshToken, err := h.store.CreateRefreshToken(u.ID)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create session")
 		return
@@ -174,8 +174,8 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	// Check if registration is allowed
-	allowReg, _ := h.db.GetSetting("allow_registration")
-	requireInvite, _ := h.db.GetSetting("require_invite")
+	allowReg, _ := h.store.GetSetting("allow_registration")
+	requireInvite, _ := h.store.GetSetting("require_invite")
 
 	if allowReg != "1" {
 		errResp(w, http.StatusForbidden, "registration is disabled")
@@ -206,7 +206,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// HIBP check — only skip if explicitly disabled via setting.
-	hibpEnabled, _ := h.db.GetSetting("hibp_check_enabled")
+	hibpEnabled, _ := h.store.GetSetting("hibp_check_enabled")
 	if hibpEnabled != "0" {
 		if checkHIBP(req.Password) {
 			errResp(w, http.StatusBadRequest, "this password has appeared in a known data breach; please choose a different password")
@@ -229,17 +229,17 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 			errResp(w, http.StatusForbidden, "invite code required")
 			return
 		}
-		inv, err := h.db.GetInviteByCode(req.InviteCode)
+		inv, err := h.store.GetInviteByCode(req.InviteCode)
 		if err != nil {
 			errResp(w, http.StatusForbidden, "invalid invite code")
 			return
 		}
 		// Fix #5: IsInviteValid checks both max uses and expiry.
-		if !h.db.IsInviteValid(inv) {
+		if !h.store.IsInviteValid(inv) {
 			errResp(w, http.StatusForbidden, "invite code is no longer valid")
 			return
 		}
-		h.db.UseInvite(req.InviteCode)
+		h.store.UseInvite(req.InviteCode)
 	}
 
 	hash, err := h.auth.HashPassword(req.Password)
@@ -248,7 +248,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := h.db.CreateUser(req.Username, req.Email, hash, false)
+	u, err := h.store.CreateUser(req.Username, req.Email, hash, false)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			errResp(w, http.StatusConflict, "username or email already taken")
@@ -264,7 +264,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refreshToken, err := h.db.CreateRefreshToken(u.ID)
+	refreshToken, err := h.store.CreateRefreshToken(u.ID)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create session")
 		return
@@ -287,13 +287,13 @@ func (h *Handler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, newRefreshRaw, err := h.db.RotateRefreshToken(cookie.Value)
+	userID, newRefreshRaw, err := h.store.RotateRefreshToken(cookie.Value)
 	if err != nil {
 		errResp(w, http.StatusUnauthorized, "invalid or expired refresh token")
 		return
 	}
 
-	u, err := h.db.GetUserByID(userID)
+	u, err := h.store.GetUserByID(userID)
 	if err != nil {
 		errResp(w, http.StatusUnauthorized, "user not found")
 		return
@@ -316,7 +316,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	// Revoke refresh token stored in cookie if present.
 	if cookie, err := r.Cookie("chirm_token"); err == nil {
 		if claims, err := h.auth.ValidateToken(cookie.Value); err == nil {
-			h.db.RevokeRefreshTokensForUser(claims.UserID)
+			h.store.RevokeRefreshTokensForUser(claims.UserID)
 		}
 	}
 
@@ -354,14 +354,14 @@ func (h *Handler) VerifyTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := h.db.ConsumeTOTPPendingSession(req.PendingToken)
+	userID := h.store.ConsumeTOTPPendingSession(req.PendingToken)
 	if userID == "" {
 		logger.Audit("totp_verify_failed", "reason", "invalid_pending_token", "ip", r.RemoteAddr)
 		errResp(w, http.StatusUnauthorized, "invalid or expired 2FA session")
 		return
 	}
 
-	secret, enabled := h.db.GetTOTPSecret(userID)
+	secret, enabled := h.store.GetTOTPSecret(userID)
 	if !enabled {
 		errResp(w, http.StatusBadRequest, "2FA is not enabled for this account")
 		return
@@ -370,7 +370,7 @@ func (h *Handler) VerifyTOTP(w http.ResponseWriter, r *http.Request) {
 	valid := authpkg.ValidateTOTP(secret, req.Code)
 	if !valid {
 		// Try backup code.
-		valid = h.db.UseBackupCode(userID, strings.ToUpper(strings.ReplaceAll(req.Code, " ", "")))
+		valid = h.store.UseBackupCode(userID, strings.ToUpper(strings.ReplaceAll(req.Code, " ", "")))
 	}
 	if !valid {
 		logger.Audit("totp_verify_failed", "user_id", userID, "ip", r.RemoteAddr)
@@ -378,7 +378,7 @@ func (h *Handler) VerifyTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := h.db.GetUserByID(userID)
+	u, err := h.store.GetUserByID(userID)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "user not found")
 		return
@@ -389,7 +389,7 @@ func (h *Handler) VerifyTOTP(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
-	refreshToken, err := h.db.CreateRefreshToken(u.ID)
+	refreshToken, err := h.store.CreateRefreshToken(u.ID)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create session")
 		return
@@ -416,7 +416,7 @@ func (h *Handler) SetupTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.SetTOTPSecret(u.ID, secret); err != nil {
+	if err := h.store.SetTOTPSecret(u.ID, secret); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to store secret")
 		return
 	}
@@ -441,7 +441,7 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secret, _ := h.db.GetTOTPSecret(u.ID)
+	secret, _ := h.store.GetTOTPSecret(u.ID)
 	if secret == "" {
 		errResp(w, http.StatusBadRequest, "run TOTP setup first")
 		return
@@ -451,7 +451,7 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	backupCodes, err := h.db.ConfirmTOTP(u.ID)
+	backupCodes, err := h.store.ConfirmTOTP(u.ID)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to enable 2FA")
 		return
@@ -477,7 +477,7 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secret, enabled := h.db.GetTOTPSecret(u.ID)
+	secret, enabled := h.store.GetTOTPSecret(u.ID)
 	if !enabled {
 		errResp(w, http.StatusBadRequest, "2FA is not enabled")
 		return
@@ -487,7 +487,7 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.DisableTOTP(u.ID); err != nil {
+	if err := h.store.DisableTOTP(u.ID); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to disable 2FA")
 		return
 	}
@@ -539,17 +539,19 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		links = "[]"
 	}
 
-	if err := h.db.UpdateUserProfile(u.ID, username, req.Avatar, bio, links); err != nil {
+	if err := h.store.UpdateUserProfile(u.ID, username, req.Avatar, bio, links); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
 
 	// Banner field: update only when explicitly provided
 	if req.Banner != nil {
-		h.db.UpdateUserBanner(u.ID, *req.Banner)
+		h.store.UpdateUserBanner(u.ID, *req.Banner)
 	}
 
-	updated, _ := h.db.GetUserByID(u.ID)
+	updated, _ := h.store.GetUserByID(u.ID)
+
+	go h.store.PropagateProfileUpdate(updated.ID, updated.Username, updated.Avatar)
 
 	h.bus.Publish(events.Event{
 		Type: events.UserProfileChanged,
@@ -620,13 +622,15 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	avatarURL := "/api/v1/uploads/" + filename
-	if err := h.db.UpdateUser(u.ID, u.Username, avatarURL); err != nil {
+	if err := h.store.UpdateUser(u.ID, u.Username, avatarURL); err != nil {
 		os.Remove(destPath)
 		errResp(w, http.StatusInternalServerError, "failed to update avatar")
 		return
 	}
 
-	updated, _ := h.db.GetUserByID(u.ID)
+	updated, _ := h.store.GetUserByID(u.ID)
+
+	go h.store.PropagateProfileUpdate(updated.ID, updated.Username, updated.Avatar)
 
 	h.bus.Publish(events.Event{
 		Type: events.UserProfileChanged,
@@ -644,7 +648,7 @@ func (h *Handler) UploadBanner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	maxMBStr, _ := h.db.GetSetting("max_upload_mb")
+	maxMBStr, _ := h.store.GetSetting("max_upload_mb")
 	maxMB := int64(25)
 	if n, err := strconv.ParseInt(maxMBStr, 10, 64); err == nil && n > 0 {
 		maxMB = n
@@ -701,13 +705,13 @@ func (h *Handler) UploadBanner(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bannerURL := "/api/v1/uploads/" + filename
-	if err := h.db.UpdateUserBanner(u.ID, bannerURL); err != nil {
+	if err := h.store.UpdateUserBanner(u.ID, bannerURL); err != nil {
 		os.Remove(destPath)
 		errResp(w, http.StatusInternalServerError, "failed to update banner")
 		return
 	}
 
-	updated, _ := h.db.GetUserByID(u.ID)
+	updated, _ := h.store.GetUserByID(u.ID)
 	ok(w, updated)
 }
 
@@ -733,7 +737,7 @@ func (h *Handler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.UpdateUserStatus(u.ID, req.Status); err != nil {
+	if err := h.store.UpdateUserStatus(u.ID, req.Status); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to update status")
 		return
 	}
@@ -755,7 +759,7 @@ func (h *Handler) GetUserProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := chi.URLParam(r, "id")
-	u, err := h.db.GetUserByID(userID)
+	u, err := h.store.GetUserByID(userID)
 	if err != nil {
 		errResp(w, http.StatusNotFound, "user not found")
 		return

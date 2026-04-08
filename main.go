@@ -52,11 +52,11 @@ func main() {
 		log.Fatal("Failed to create data directory:", err)
 	}
 
-	database, err := db.Init(cfg.DataDir + "/chirm.db")
+	store, err := db.New(cfg.DataDir)
 	if err != nil {
 		log.Fatal("Failed to init database:", err)
 	}
-	defer database.Close()
+	defer store.Close()
 
 	authSvc := auth.New(cfg.JWTSecret)
 	wsHub := hub.New(cfg.AllowedOrigin)
@@ -88,14 +88,14 @@ func main() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
-			if err := database.CleanOrphanedAttachments(cfg.DataDir+"/uploads", 1*time.Hour); err != nil {
+			if err := store.CleanOrphanedAttachments(cfg.DataDir+"/uploads", 1*time.Hour); err != nil {
 				log.Printf("attachment cleanup error: %v", err)
 			}
-			database.ReconcileAllStorageUsed()
+			store.ReconcileAllStorageUsed()
 		}
 	}()
 
-	h := handlers.New(database, authSvc, wsHub, bus, cfg.DataDir, cfg.AllowedOrigin)
+	h := handlers.New(store, authSvc, wsHub, bus, cfg.DataDir, cfg.AllowedOrigin)
 
 	// Initialise VAPID keys for Web Push notifications (non-fatal if it fails)
 	if err := h.InitVAPID(); err != nil {
@@ -225,7 +225,7 @@ func main() {
 	authLimiter := mw.NewIPRateLimiter(rate.Every(time.Minute/10), 5)
 
 	// All API routes and WebSocket are registered by the router package.
-	router.Register(r, h, authSvc, database, authLimiter, bus, wsHub, pluginList)
+	router.Register(r, h, authSvc, store, authLimiter, bus, wsHub, pluginList)
 
 	// CA cert download — served over plain HTTP so devices can fetch and install
 	// it before they trust the server's TLS certificate.
@@ -362,7 +362,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		httpServer.Shutdown(ctx)
-		database.Close()
+		store.Close()
 		os.Exit(0)
 	}()
 

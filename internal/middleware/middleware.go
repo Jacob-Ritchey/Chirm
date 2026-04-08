@@ -51,9 +51,9 @@ func writeUnauth(w http.ResponseWriter, msg string) {
 	})
 }
 
-// Auth validates JWT tokens and bot tokens. database may be nil for routes
+// Auth validates JWT tokens and bot tokens. store may be nil for routes
 // that don't need bot support.
-func Auth(svc *auth.Service, database *db.DB) func(http.Handler) http.Handler {
+func Auth(svc *auth.Service, store *db.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tokenStr := ""
@@ -76,8 +76,8 @@ func Auth(svc *auth.Service, database *db.DB) func(http.Handler) http.Handler {
 			}
 
 			// Bot token path
-			if strings.HasPrefix(tokenStr, "chirm_bot_") && database != nil {
-				bot, err := database.GetBotByToken(tokenStr)
+			if strings.HasPrefix(tokenStr, "chirm_bot_") && store != nil {
+				bot, err := store.GetBotByToken(tokenStr)
 				if err != nil {
 					writeUnauth(w, "invalid bot token")
 					return

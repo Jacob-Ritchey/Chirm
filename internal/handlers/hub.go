@@ -7,8 +7,6 @@ import (
 )
 
 // handleWSMessage dispatches incoming WebSocket messages from a client.
-// This is the transport layer: it decodes the message type and calls the
-// appropriate Hub method or sends responses back to the client.
 func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 	switch evt.Type {
 
@@ -19,13 +17,12 @@ func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
 			return
 		}
-		// Re-validate channel existence on every subscribe (membership can change mid-session).
-		ch, err := h.db.GetChannelByID(d.ChannelID)
+		ch, err := h.store.GetChannelByID(d.ChannelID)
 		if err != nil || ch == nil {
 			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "channel not found"}})
 			return
 		}
-		c.SetChannel(d.ChannelID) // also clears threadChannelID
+		c.SetChannel(d.ChannelID)
 
 	case "thread_subscribe":
 		var d struct {
@@ -34,8 +31,7 @@ func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
 			return
 		}
-		// Validate thread channel exists before subscribing.
-		ch, err := h.db.GetChannelByID(d.ChannelID)
+		ch, err := h.store.GetChannelByID(d.ChannelID)
 		if err != nil || ch == nil {
 			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "channel not found"}})
 			return
@@ -63,8 +59,7 @@ func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
 			return
 		}
-		// Verify the channel exists before admitting the client.
-		if ch, err := h.db.GetChannelByID(d.ChannelID); err != nil || ch == nil {
+		if ch, err := h.store.GetChannelByID(d.ChannelID); err != nil || ch == nil {
 			return
 		}
 		existing := h.hub.JoinVoiceRoom(d.ChannelID, c)

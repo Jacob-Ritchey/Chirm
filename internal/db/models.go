@@ -73,13 +73,15 @@ type MessageRef struct {
 }
 
 // Thread represents a named sub-conversation within a channel.
+// In the multi-DB architecture, thread_id === thread_channel_id: the thread
+// record lives in channels/{ID}.db and messages live in the same file.
 type Thread struct {
 	ID              string    `json:"id"`
 	ChannelID       string    `json:"channel_id"`
 	ThreadChannelID string    `json:"thread_channel_id,omitempty"`
 	Name            string    `json:"name"`
 	CreatorID       string    `json:"creator_id,omitempty"`
-	Creator         *User     `json:"creator,omitempty"`
+	CreatorUsername string    `json:"creator_username,omitempty"`
 	SourceMessageID *string   `json:"source_message_id,omitempty"`
 	MessageCount    int       `json:"message_count"`
 	LastActivityAt  time.Time `json:"last_activity_at"`
@@ -96,21 +98,26 @@ type ThreadRef struct {
 
 // Message represents a chat message.
 type Message struct {
-	ID          string       `json:"id"`
-	ChannelID   string       `json:"channel_id"`
-	UserID      string       `json:"user_id,omitempty"` // empty for bot messages
-	BotID       *string      `json:"bot_id,omitempty"`
-	Content     string       `json:"content"`
-	ReplyToID   *string      `json:"reply_to_id,omitempty"`
-	ReplyTo     *MessageRef  `json:"reply_to,omitempty"`
-	ThreadID    *string      `json:"thread_id,omitempty"`
-	Thread      *ThreadRef   `json:"thread,omitempty"` // set when this msg is the source_message of a thread
-	EditedAt    *time.Time   `json:"edited_at,omitempty"`
-	CreatedAt   time.Time    `json:"created_at"`
-	Author      *User        `json:"author,omitempty"` // nil for bot messages
-	Bot         *Bot         `json:"bot,omitempty"`    // set for bot messages
-	Attachments []Attachment `json:"attachments,omitempty"`
-	Reactions   []Reaction   `json:"reactions,omitempty"`
+	ID             string       `json:"id"`
+	ChannelID      string       `json:"channel_id"`
+	UserID         string       `json:"user_id,omitempty"`
+	BotID          *string      `json:"bot_id,omitempty"`
+	// Denormalized author fields — populated at write time, updated on profile change.
+	AuthorUsername string       `json:"author_username,omitempty"`
+	AuthorAvatar   string       `json:"author_avatar,omitempty"`
+	BotName        string       `json:"bot_name,omitempty"`
+	Content        string       `json:"content"`
+	ReplyToID      *string      `json:"reply_to_id,omitempty"`
+	ReplyTo        *MessageRef  `json:"reply_to,omitempty"`
+	ThreadID       *string      `json:"thread_id,omitempty"`
+	Thread         *ThreadRef   `json:"thread,omitempty"`
+	EditedAt       *time.Time   `json:"edited_at,omitempty"`
+	CreatedAt      time.Time    `json:"created_at"`
+	// Author/Bot are populated from denormalized fields for JSON responses.
+	Author         *User        `json:"author,omitempty"`
+	Bot            *Bot         `json:"bot,omitempty"`
+	Attachments    []Attachment `json:"attachments,omitempty"`
+	Reactions      []Reaction   `json:"reactions,omitempty"`
 }
 
 // Attachment represents a file attached to a message.
@@ -126,23 +133,23 @@ type Attachment struct {
 
 // Invite represents a server invite link.
 type Invite struct {
-	Code      string     `json:"code"`
-	CreatedBy string     `json:"created_by"`
-	Uses      int        `json:"uses"`
-	MaxUses   int        `json:"max_uses"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	Creator   *User      `json:"creator,omitempty"`
+	Code            string     `json:"code"`
+	CreatedBy       string     `json:"created_by"`
+	CreatorUsername string     `json:"creator_username,omitempty"`
+	Uses            int        `json:"uses"`
+	MaxUses         int        `json:"max_uses"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
 }
 
 // CustomEmoji represents a server-specific custom emoji.
 type CustomEmoji struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Filename   string    `json:"filename"`
-	UploaderID string    `json:"uploader_id"`
-	Uploader   *User     `json:"uploader,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Filename         string    `json:"filename"`
+	UploaderID       string    `json:"uploader_id"`
+	UploaderUsername string    `json:"uploader_username,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // PushSubscription stores a Web Push endpoint for a user.

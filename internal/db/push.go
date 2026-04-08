@@ -7,41 +7,39 @@ import (
 
 // ─── Push Subscriptions ───────────────────────────────────────────────────────
 
-func (d *DB) SavePushSubscription(userID, data string) error {
-	// Parse endpoint from data JSON to use as dedup key
+func (s *Store) SavePushSubscription(userID, data string) error {
 	var sub struct {
 		Endpoint string `json:"endpoint"`
 	}
 	if err := json.Unmarshal([]byte(data), &sub); err != nil || sub.Endpoint == "" {
 		return fmt.Errorf("invalid subscription data")
 	}
-	// Remove any existing subscription this user has for the same endpoint.
-	_, _ = d.Exec(`DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?`, userID, sub.Endpoint)
+	_, _ = s.members.Exec(`DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?`, userID, sub.Endpoint)
 	id := NewID()
-	_, err := d.Exec(`
+	_, err := s.members.Exec(`
 		INSERT INTO push_subscriptions (id, user_id, endpoint, data)
 		VALUES (?, ?, ?, ?)`,
 		id, userID, sub.Endpoint, data)
 	return err
 }
 
-func (d *DB) DeletePushSubscription(userID, endpoint string) error {
-	_, err := d.Exec(`DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?`, userID, endpoint)
+func (s *Store) DeletePushSubscription(userID, endpoint string) error {
+	_, err := s.members.Exec(`DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?`, userID, endpoint)
 	return err
 }
 
 // GetAllPushSubscriptions returns all push subscriptions for all users.
-func (d *DB) GetAllPushSubscriptions() ([]PushSubscription, error) {
-	rows, err := d.Query(`SELECT id, user_id, endpoint, data FROM push_subscriptions`)
+func (s *Store) GetAllPushSubscriptions() ([]PushSubscription, error) {
+	rows, err := s.members.Query(`SELECT id, user_id, endpoint, data FROM push_subscriptions`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var subs []PushSubscription
 	for rows.Next() {
-		var s PushSubscription
-		if err := rows.Scan(&s.ID, &s.UserID, &s.Endpoint, &s.Data); err == nil {
-			subs = append(subs, s)
+		var sub PushSubscription
+		if err := rows.Scan(&sub.ID, &sub.UserID, &sub.Endpoint, &sub.Data); err == nil {
+			subs = append(subs, sub)
 		}
 	}
 	return subs, rows.Err()

@@ -12,7 +12,7 @@ const refreshTokenTTL = 30 * 24 * time.Hour
 // CreateRefreshToken generates a new refresh token for the given user, stores
 // its SHA-256 hash in the database, and returns the raw token to send to the
 // client. The raw token is never stored.
-func (d *DB) CreateRefreshToken(userID string) (string, error) {
+func (s *Store) CreateRefreshToken(userID string) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -21,7 +21,7 @@ func (d *DB) CreateRefreshToken(userID string) (string, error) {
 	hash := hashRefreshToken(raw)
 	expires := time.Now().Add(refreshTokenTTL)
 
-	_, err := d.Exec(
+	_, err := s.auth.Exec(
 		`INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)`,
 		NewID(), userID, hash, expires,
 	)
@@ -33,11 +33,11 @@ func (d *DB) CreateRefreshToken(userID string) (string, error) {
 
 // RotateRefreshToken validates the provided raw token, deletes it, and issues
 // a new one. Returns (userID, newRawToken, error).
-func (d *DB) RotateRefreshToken(rawToken string) (string, string, error) {
+func (s *Store) RotateRefreshToken(rawToken string) (string, string, error) {
 	hash := hashRefreshToken(rawToken)
 
 	var userID string
-	err := d.QueryRow(
+	err := s.auth.QueryRow(
 		`SELECT user_id FROM refresh_tokens WHERE token_hash = ? AND expires_at > CURRENT_TIMESTAMP`,
 		hash,
 	).Scan(&userID)
@@ -45,11 +45,9 @@ func (d *DB) RotateRefreshToken(rawToken string) (string, string, error) {
 		return "", "", err
 	}
 
-	// Delete the used token.
-	d.Exec(`DELETE FROM refresh_tokens WHERE token_hash = ?`, hash)
+	s.auth.Exec(`DELETE FROM refresh_tokens WHERE token_hash = ?`, hash)
 
-	// Issue a new one.
-	newRaw, err := d.CreateRefreshToken(userID)
+	newRaw, err := s.CreateRefreshToken(userID)
 	if err != nil {
 		return "", "", err
 	}
@@ -57,8 +55,8 @@ func (d *DB) RotateRefreshToken(rawToken string) (string, string, error) {
 }
 
 // RevokeRefreshTokensForUser deletes all refresh tokens for a user (on logout).
-func (d *DB) RevokeRefreshTokensForUser(userID string) {
-	d.Exec(`DELETE FROM refresh_tokens WHERE user_id = ?`, userID)
+func (s *Store) RevokeRefreshTokensForUser(userID string) {
+	s.auth.Exec(`DELETE FROM refresh_tokens WHERE user_id = ?`, userID)
 }
 
 func hashRefreshToken(raw string) string {

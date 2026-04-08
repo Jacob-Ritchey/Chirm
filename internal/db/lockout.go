@@ -30,11 +30,11 @@ func normalise(identifier string) string {
 
 // GetLoginAttemptState returns the current attempt count and lockout time for
 // a username or email. Returns a zero-value struct if no record exists yet.
-func (d *DB) GetLoginAttemptState(identifier string) LoginAttemptState {
+func (s *Store) GetLoginAttemptState(identifier string) LoginAttemptState {
 	id := normalise(identifier)
 	var state LoginAttemptState
 	var lockedUntil sql.NullTime
-	err := d.QueryRow(
+	err := s.auth.QueryRow(
 		`SELECT attempts, locked_until FROM login_attempts WHERE identifier = ?`, id,
 	).Scan(&state.Attempts, &lockedUntil)
 	if err != nil {
@@ -48,8 +48,8 @@ func (d *DB) GetLoginAttemptState(identifier string) LoginAttemptState {
 }
 
 // IsLocked reports whether the identifier is currently locked out.
-func (d *DB) IsLocked(identifier string) (locked bool, until time.Time) {
-	state := d.GetLoginAttemptState(identifier)
+func (s *Store) IsLocked(identifier string) (locked bool, until time.Time) {
+	state := s.GetLoginAttemptState(identifier)
 	if state.LockedUntil != nil && time.Now().Before(*state.LockedUntil) {
 		return true, *state.LockedUntil
 	}
@@ -58,9 +58,9 @@ func (d *DB) IsLocked(identifier string) (locked bool, until time.Time) {
 
 // RecordFailedLogin increments the failure counter and applies a lockout if a
 // threshold is crossed.
-func (d *DB) RecordFailedLogin(identifier string) {
+func (s *Store) RecordFailedLogin(identifier string) {
 	id := normalise(identifier)
-	d.Exec(`
+	s.auth.Exec(`
 		INSERT INTO login_attempts (identifier, attempts, updated_at)
 		VALUES (?, 1, CURRENT_TIMESTAMP)
 		ON CONFLICT(identifier) DO UPDATE SET
@@ -68,22 +68,22 @@ func (d *DB) RecordFailedLogin(identifier string) {
 			updated_at = CURRENT_TIMESTAMP
 	`, id)
 
-	state := d.GetLoginAttemptState(id)
+	state := s.GetLoginAttemptState(id)
 	for _, l := range lockoutDurations {
 		if state.Attempts >= l.threshold {
 			until := time.Now().Add(l.duration)
-			d.Exec(`UPDATE login_attempts SET locked_until = ? WHERE identifier = ?`, until, id)
+			s.auth.Exec(`UPDATE login_attempts SET locked_until = ? WHERE identifier = ?`, until, id)
 			break
 		}
 	}
 }
 
 // ClearLoginAttempts resets the failure counter on a successful login.
-func (d *DB) ClearLoginAttempts(identifier string) {
-	d.Exec(`DELETE FROM login_attempts WHERE identifier = ?`, normalise(identifier))
+func (s *Store) ClearLoginAttempts(identifier string) {
+	s.auth.Exec(`DELETE FROM login_attempts WHERE identifier = ?`, normalise(identifier))
 }
 
 // UnlockIdentifier allows an admin to manually clear a lockout.
-func (d *DB) UnlockIdentifier(identifier string) {
-	d.Exec(`DELETE FROM login_attempts WHERE identifier = ?`, normalise(identifier))
+func (s *Store) UnlockIdentifier(identifier string) {
+	s.auth.Exec(`DELETE FROM login_attempts WHERE identifier = ?`, normalise(identifier))
 }

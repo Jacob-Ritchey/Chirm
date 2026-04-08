@@ -6,45 +6,94 @@ import (
 )
 
 // --- Threads ---
+//
+// In the multi-DB architecture thread_id === thread_channel_id. A single NewID()
+// is used for both the thread record and its companion channel record. The thread
+// DB file is channels/{thread_id}.db, which is the same path as the thread channel.
+//
+// Write path for a thread message:
+//   1. INSERT message       → channels/{thread_id}.db     (thread's own DB)
+//   2. UPDATE thread        → channels/{thread_id}.db     (same file, free)
+//   3. UPDATE thread_index  → channels/{parent_channel_id}.db (one lightweight UPDATE)
 
-func (d *DB) CreateThread(channelID, name, creatorID string, sourceMessageID *string) (*Thread, error) {
-	id := NewID()
-	_, err := d.Exec(
-		`INSERT INTO threads (id, channel_id, name, creator_id, source_message_id) VALUES (?, ?, ?, ?, ?)`,
-		id, channelID, name, creatorID, sourceMessageID,
-	)
+// CreateThread creates a thread, its companion channel record, its own DB file,
+// and inserts the thread record and thread_index entry into the correct DBs.
+func (s *Store) CreateThread(parentChannelID, name, creatorID string, sourceMessageID *string) (*Thread, error) {
+	// thread_id === thread_channel_id
+	threadID := NewID()
+
+	creatorUsername := ""
+	if u, err := s.GetUserByID(creatorID); err == nil {
+		creatorUsername = u.Username
+	}
+
+	// 1. Register the thread as a channel in server.db (type='thread' hides it from ListChannels).
+	if _, err := s.server.Exec(`INSERT INTO channels (id, name, type) VALUES (?, ?, 'thread')`, threadID, name); err != nil {
+		return nil, err
+	}
+
+	// 2. Create the thread's own DB file and run migrations.
+	tdb, err := s.channels.Create(threadID)
 	if err != nil {
+		s.server.Exec(`DELETE FROM channels WHERE id = ?`, threadID)
 		return nil, err
 	}
 
-	// Create a companion hidden channel for this thread (type='thread' hides it from ListChannels).
-	chID := NewID()
-	if _, err := d.Exec(`INSERT INTO channels (id, name, type) VALUES (?, ?, 'thread')`, chID, name); err != nil {
-		return nil, err
-	}
-	if _, err := d.Exec(`UPDATE threads SET thread_channel_id = ? WHERE id = ?`, chID, id); err != nil {
+	// 3. Insert the full thread record into the thread's own DB.
+	if _, err := tdb.Exec(
+		`INSERT INTO thread (id, channel_id, thread_channel_id, name, creator_id, creator_username, source_message_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		threadID, parentChannelID, threadID, name, creatorID, creatorUsername, sourceMessageID,
+	); err != nil {
+		s.channels.Delete(threadID)
+		s.server.Exec(`DELETE FROM channels WHERE id = ?`, threadID)
 		return nil, err
 	}
 
-	return d.GetThreadByID(id)
+	// 4. Insert the thread_index entry into the parent channel's DB.
+	pdb, err := s.channels.For(parentChannelID)
+	if err != nil {
+		s.channels.Delete(threadID)
+		s.server.Exec(`DELETE FROM channels WHERE id = ?`, threadID)
+		return nil, err
+	}
+	if _, err := pdb.Exec(
+		`INSERT INTO thread_index (id, thread_channel_id, name, creator_username, source_message_id)
+		 VALUES (?, ?, ?, ?, ?)`,
+		threadID, threadID, name, creatorUsername, sourceMessageID,
+	); err != nil {
+		s.channels.Delete(threadID)
+		s.server.Exec(`DELETE FROM channels WHERE id = ?`, threadID)
+		return nil, err
+	}
+
+	return s.GetThreadByID(threadID)
 }
 
-func (d *DB) GetThreadByID(id string) (*Thread, error) {
-	t := &Thread{}
-	var creatorID sql.NullString
-	var sourceMsgID sql.NullString
-	var threadChannelID sql.NullString
-	err := d.QueryRow(
-		`SELECT id, channel_id, COALESCE(thread_channel_id,''), name, creator_id, source_message_id, message_count, last_activity_at, created_at
-		 FROM threads WHERE id = ?`, id,
-	).Scan(&t.ID, &t.ChannelID, &t.ThreadChannelID, &t.Name, &creatorID, &sourceMsgID, &t.MessageCount, &t.LastActivityAt, &t.CreatedAt)
+// GetThreadByID reads the full thread record from the thread's own DB.
+// Since thread_id === thread_channel_id, the DB path is channels/{id}.db.
+func (s *Store) GetThreadByID(id string) (*Thread, error) {
+	tdb, err := s.channels.For(id)
 	if err != nil {
 		return nil, err
 	}
-	_ = threadChannelID
+	return s.getThreadFromDB(tdb, id)
+}
+
+func (s *Store) getThreadFromDB(tdb *sql.DB, id string) (*Thread, error) {
+	t := &Thread{}
+	var creatorID, sourceMsgID sql.NullString
+	err := tdb.QueryRow(
+		`SELECT id, channel_id, thread_channel_id, name, creator_id, creator_username,
+		        source_message_id, message_count, last_activity_at, created_at
+		 FROM thread WHERE id = ?`, id,
+	).Scan(&t.ID, &t.ChannelID, &t.ThreadChannelID, &t.Name, &creatorID,
+		&t.CreatorUsername, &sourceMsgID, &t.MessageCount, &t.LastActivityAt, &t.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
 	if creatorID.Valid {
 		t.CreatorID = creatorID.String
-		t.Creator, _ = d.GetUserByID(creatorID.String)
 	}
 	if sourceMsgID.Valid {
 		t.SourceMessageID = &sourceMsgID.String
@@ -52,46 +101,32 @@ func (d *DB) GetThreadByID(id string) (*Thread, error) {
 	return t, nil
 }
 
-// GetThreadByChannelID looks up a thread by its companion thread_channel_id.
-// Used by SendMessage to detect when a message is sent to a thread channel.
-func (d *DB) GetThreadByChannelID(threadChannelID string) (*Thread, error) {
-	t := &Thread{}
-	var creatorID sql.NullString
-	var sourceMsgID sql.NullString
-	err := d.QueryRow(
-		`SELECT id, channel_id, COALESCE(thread_channel_id,''), name, creator_id, source_message_id, message_count, last_activity_at, created_at
-		 FROM threads WHERE thread_channel_id = ?`, threadChannelID,
-	).Scan(&t.ID, &t.ChannelID, &t.ThreadChannelID, &t.Name, &creatorID, &sourceMsgID, &t.MessageCount, &t.LastActivityAt, &t.CreatedAt)
+// GetThreadByChannelID is equivalent to GetThreadByID since thread_id === thread_channel_id.
+func (s *Store) GetThreadByChannelID(threadChannelID string) (*Thread, error) {
+	return s.GetThreadByID(threadChannelID)
+}
+
+// ListThreadsByChannel returns threads in a parent channel ordered by last activity,
+// reading from the parent channel's thread_index table.
+func (s *Store) ListThreadsByChannel(channelID string, before string, limit int) ([]Thread, error) {
+	pdb, err := s.channels.For(channelID)
 	if err != nil {
 		return nil, err
 	}
-	if creatorID.Valid {
-		t.CreatorID = creatorID.String
-	}
-	if sourceMsgID.Valid {
-		t.SourceMessageID = &sourceMsgID.String
-	}
-	return t, nil
-}
 
-func (d *DB) ListThreadsByChannel(channelID string, before string, limit int) ([]Thread, error) {
 	var rows *sql.Rows
-	var err error
 	if before == "" {
-		rows, err = d.Query(
-			`SELECT id, channel_id, COALESCE(thread_channel_id,''), name, creator_id, source_message_id, message_count, last_activity_at, created_at
-			 FROM threads WHERE channel_id = ?
-			 ORDER BY last_activity_at DESC LIMIT ?`,
-			channelID, limit,
-		)
+		rows, err = pdb.Query(
+			`SELECT id, thread_channel_id, name, creator_username, source_message_id,
+			        message_count, last_activity_at, created_at
+			 FROM thread_index ORDER BY last_activity_at DESC LIMIT ?`, limit)
 	} else {
-		rows, err = d.Query(
-			`SELECT id, channel_id, COALESCE(thread_channel_id,''), name, creator_id, source_message_id, message_count, last_activity_at, created_at
-			 FROM threads WHERE channel_id = ?
-			   AND last_activity_at < (SELECT last_activity_at FROM threads WHERE id = ?)
-			 ORDER BY last_activity_at DESC LIMIT ?`,
-			channelID, before, limit,
-		)
+		rows, err = pdb.Query(
+			`SELECT id, thread_channel_id, name, creator_username, source_message_id,
+			        message_count, last_activity_at, created_at
+			 FROM thread_index
+			 WHERE last_activity_at < (SELECT last_activity_at FROM thread_index WHERE id = ?)
+			 ORDER BY last_activity_at DESC LIMIT ?`, before, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -101,13 +136,10 @@ func (d *DB) ListThreadsByChannel(channelID string, before string, limit int) ([
 	var threads []Thread
 	for rows.Next() {
 		var t Thread
-		var creatorID sql.NullString
 		var sourceMsgID sql.NullString
-		rows.Scan(&t.ID, &t.ChannelID, &t.ThreadChannelID, &t.Name, &creatorID, &sourceMsgID, &t.MessageCount, &t.LastActivityAt, &t.CreatedAt)
-		if creatorID.Valid {
-			t.CreatorID = creatorID.String
-			t.Creator, _ = d.GetUserByID(creatorID.String)
-		}
+		rows.Scan(&t.ID, &t.ThreadChannelID, &t.Name, &t.CreatorUsername, &sourceMsgID,
+			&t.MessageCount, &t.LastActivityAt, &t.CreatedAt)
+		t.ChannelID = channelID
 		if sourceMsgID.Valid {
 			t.SourceMessageID = &sourceMsgID.String
 		}
@@ -116,68 +148,79 @@ func (d *DB) ListThreadsByChannel(channelID string, before string, limit int) ([
 	return threads, nil
 }
 
-func (d *DB) DeleteThread(id string) error {
-	_, err := d.Exec(`DELETE FROM threads WHERE id = ?`, id)
+// DeleteThread removes the thread from all three locations:
+// thread_index in parent channel DB, thread record in thread's own DB,
+// the channels record in server.db, and the thread's DB file itself.
+func (s *Store) DeleteThread(threadID string) error {
+	// Get thread to find parent channel ID.
+	t, err := s.GetThreadByID(threadID)
+	if err != nil {
+		return err
+	}
+
+	// Remove thread_index from parent channel DB.
+	if pdb, err := s.channels.For(t.ChannelID); err == nil {
+		pdb.Exec(`DELETE FROM thread_index WHERE id = ?`, threadID)
+	}
+
+	// Remove channel record from server.db.
+	s.server.Exec(`DELETE FROM channels WHERE id = ?`, threadID)
+
+	// Delete thread's own DB file (closes handle + removes file).
+	return s.channels.Delete(threadID)
+}
+
+// IncrementThreadMessageCount updates message_count and last_activity_at in both
+// the thread's own DB (thread table) and the parent channel's DB (thread_index).
+func (s *Store) IncrementThreadMessageCount(threadID, parentChannelID string) error {
+	now := time.Now()
+
+	tdb, err := s.channels.For(threadID)
+	if err != nil {
+		return err
+	}
+	if _, err := tdb.Exec(
+		`UPDATE thread SET message_count = message_count + 1, last_activity_at = ? WHERE id = ?`,
+		now, threadID,
+	); err != nil {
+		return err
+	}
+
+	if pdb, err := s.channels.For(parentChannelID); err == nil {
+		pdb.Exec(
+			`UPDATE thread_index SET message_count = message_count + 1, last_activity_at = ? WHERE id = ?`,
+			now, threadID,
+		)
+	}
+	return nil
+}
+
+// DecrementThreadMessageCount decrements message_count in the thread's own DB.
+// (thread_index count drifts and is reconciled by IncrementThreadMessageCount.)
+func (s *Store) DecrementThreadMessageCount(threadID string) error {
+	tdb, err := s.channels.For(threadID)
+	if err != nil {
+		return err
+	}
+	_, err = tdb.Exec(
+		`UPDATE thread SET message_count = MAX(0, message_count - 1) WHERE id = ?`, threadID)
 	return err
 }
 
-func (d *DB) IncrementThreadMessageCount(threadID string) error {
-	_, err := d.Exec(
-		`UPDATE threads SET message_count = message_count + 1, last_activity_at = ? WHERE id = ?`,
-		time.Now(), threadID,
-	)
-	return err
-}
-
-func (d *DB) DecrementThreadMessageCount(threadID string) error {
-	_, err := d.Exec(
-		`UPDATE threads SET message_count = MAX(0, message_count - 1) WHERE id = ?`,
-		threadID,
-	)
-	return err
-}
-
-// GetThreadFirstMessage returns the first (oldest) message in a thread's channel.
+// GetThreadFirstMessage returns the first (oldest) message in a thread's own channel.
 // Used for forum/gallery post card previews.
-func (d *DB) GetThreadFirstMessage(threadID string) (*Message, error) {
-	thread, err := d.GetThreadByID(threadID)
+func (s *Store) GetThreadFirstMessage(threadID string) (*Message, error) {
+	tdb, err := s.channels.For(threadID)
 	if err != nil {
 		return nil, err
 	}
-	if thread.ThreadChannelID == "" {
-		// Fallback: legacy thread_id-based lookup
-		var msgID string
-		err = d.QueryRow(
-			`SELECT id FROM messages WHERE thread_id = ? ORDER BY created_at ASC LIMIT 1`,
-			threadID,
-		).Scan(&msgID)
-		if err != nil {
-			return nil, err
-		}
-		return d.GetMessageByID(msgID)
-	}
-	// New architecture: first message in the thread's own channel
 	var msgID string
-	err = d.QueryRow(
+	err = tdb.QueryRow(
 		`SELECT id FROM messages WHERE channel_id = ? ORDER BY created_at ASC LIMIT 1`,
-		thread.ThreadChannelID,
+		threadID,
 	).Scan(&msgID)
 	if err != nil {
 		return nil, err
 	}
-	return d.GetMessageByID(msgID)
-}
-
-// GetThreadRefForMessage returns a ThreadRef if the given message is the
-// source_message_id of any thread. Used to populate msg.Thread in GetMessageByID.
-func (d *DB) GetThreadRefForMessage(messageID string) (*ThreadRef, error) {
-	ref := &ThreadRef{}
-	err := d.QueryRow(
-		`SELECT id, name, message_count FROM threads WHERE source_message_id = ? LIMIT 1`,
-		messageID,
-	).Scan(&ref.ID, &ref.Name, &ref.MessageCount)
-	if err != nil {
-		return nil, err
-	}
-	return ref, nil
+	return s.getMessageFromDB(tdb, msgID, threadID)
 }

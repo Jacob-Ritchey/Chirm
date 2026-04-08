@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"embed"
 	"fmt"
 	"sort"
@@ -8,14 +9,13 @@ import (
 	"strings"
 )
 
-//go:embed migrations/*.sql
+//go:embed migrations
 var migrationFS embed.FS
 
-// runMigrations creates the schema_version tracking table and applies any
-// pending numbered SQL migration files in order.
-func (d *DB) runMigrations() error {
-	// Create the version-tracking table if it doesn't exist.
-	_, err := d.Exec(`CREATE TABLE IF NOT EXISTS schema_version (
+// runMigrations creates the schema_version tracking table in the given database
+// and applies any pending numbered SQL files from migrations/{subdir}/.
+func runMigrations(db *sql.DB, subdir string) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (
 		version    INTEGER PRIMARY KEY,
 		applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
@@ -23,14 +23,13 @@ func (d *DB) runMigrations() error {
 		return fmt.Errorf("create schema_version: %w", err)
 	}
 
-	// Determine the highest version already applied.
 	var current int
-	d.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&current)
+	db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&current)
 
-	// Read and sort migration file names.
-	entries, err := migrationFS.ReadDir("migrations")
+	dir := "migrations/" + subdir
+	entries, err := migrationFS.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("read migrations dir: %w", err)
+		return fmt.Errorf("read migrations dir %s: %w", dir, err)
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Name() < entries[j].Name()
@@ -41,14 +40,14 @@ func (d *DB) runMigrations() error {
 		if version <= current {
 			continue
 		}
-		sql, err := migrationFS.ReadFile("migrations/" + entry.Name())
+		sql, err := migrationFS.ReadFile(dir + "/" + entry.Name())
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", entry.Name(), err)
 		}
-		if _, err := d.Exec(string(sql)); err != nil {
-			return fmt.Errorf("migration %s failed: %w", entry.Name(), err)
+		if _, err := db.Exec(string(sql)); err != nil {
+			return fmt.Errorf("migration %s/%s failed: %w", subdir, entry.Name(), err)
 		}
-		if _, err := d.Exec(`INSERT INTO schema_version (version) VALUES (?)`, version); err != nil {
+		if _, err := db.Exec(`INSERT INTO schema_version (version) VALUES (?)`, version); err != nil {
 			return fmt.Errorf("record migration %d: %w", version, err)
 		}
 	}

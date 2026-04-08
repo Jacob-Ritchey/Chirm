@@ -10,9 +10,8 @@ import (
 // gate the second factor step of login. The token is returned to the client
 // in the login response body (not a cookie) so the client can send it back
 // with the TOTP code.
-func (d *DB) CreateTOTPPendingSession(userID string) (string, error) {
-	// Prune expired sessions first.
-	d.Exec(`DELETE FROM totp_pending WHERE expires_at < CURRENT_TIMESTAMP`)
+func (s *Store) CreateTOTPPendingSession(userID string) (string, error) {
+	s.auth.Exec(`DELETE FROM totp_pending WHERE expires_at < CURRENT_TIMESTAMP`)
 
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
@@ -21,7 +20,7 @@ func (d *DB) CreateTOTPPendingSession(userID string) (string, error) {
 	token := hex.EncodeToString(b)
 	expires := time.Now().Add(5 * time.Minute)
 
-	_, err := d.Exec(
+	_, err := s.auth.Exec(
 		`INSERT INTO totp_pending (token, user_id, expires_at) VALUES (?, ?, ?)`,
 		token, userID, expires,
 	)
@@ -33,15 +32,15 @@ func (d *DB) CreateTOTPPendingSession(userID string) (string, error) {
 
 // ConsumeTOTPPendingSession validates and deletes a pending session token.
 // Returns the userID on success, empty string if unknown or expired.
-func (d *DB) ConsumeTOTPPendingSession(token string) string {
+func (s *Store) ConsumeTOTPPendingSession(token string) string {
 	var userID string
-	err := d.QueryRow(
+	err := s.auth.QueryRow(
 		`SELECT user_id FROM totp_pending WHERE token = ? AND expires_at > CURRENT_TIMESTAMP`,
 		token,
 	).Scan(&userID)
 	if err != nil {
 		return ""
 	}
-	d.Exec(`DELETE FROM totp_pending WHERE token = ?`, token)
+	s.auth.Exec(`DELETE FROM totp_pending WHERE token = ?`, token)
 	return userID
 }

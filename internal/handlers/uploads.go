@@ -39,7 +39,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get max upload size from settings
-	maxMBStr, _ := h.db.GetSetting("max_upload_mb")
+	maxMBStr, _ := h.store.GetSetting("max_upload_mb")
 	maxMB := int64(25)
 	if n, err := strconv.ParseInt(maxMBStr, 10, 64); err == nil && n > 0 {
 		maxMB = n
@@ -47,10 +47,10 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	maxBytes := maxMB * 1024 * 1024
 
 	// Enforce per-user storage quota if configured.
-	quotaMBStr, _ := h.db.GetSetting("storage_quota_mb")
+	quotaMBStr, _ := h.store.GetSetting("storage_quota_mb")
 	if quotaMB, qErr := strconv.ParseInt(quotaMBStr, 10, 64); qErr == nil && quotaMB > 0 {
 		quotaBytes := quotaMB * 1024 * 1024
-		used := h.db.GetStorageUsed(u.ID)
+		used := h.store.GetStorageUsed(u.ID)
 		if used >= quotaBytes {
 			errResp(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("storage quota exceeded (%dMB limit)", quotaMB))
 			return
@@ -119,7 +119,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create attachment record (message_id will be "" until attached to a message)
-	att, err := h.db.CreateAttachment("", filename, header.Filename, mimeType, size)
+	att, err := h.store.CreateAttachment(u.ID, filename, header.Filename, mimeType, size)
 	if err != nil {
 		os.Remove(destPath)
 		errResp(w, http.StatusInternalServerError, "failed to record upload")
@@ -127,7 +127,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Track storage usage for quota enforcement.
-	h.db.AddStorageUsed(u.ID, size)
+	h.store.AddStorageUsed(u.ID, size)
 
 	created(w, map[string]interface{}{
 		"id":            att.ID,

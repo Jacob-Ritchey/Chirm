@@ -2,29 +2,35 @@ package db
 
 // --- Custom Emojis ---
 
-func (d *DB) CreateCustomEmoji(name, filename, uploaderID string) (*CustomEmoji, error) {
+func (s *Store) CreateCustomEmoji(name, filename, uploaderID string) (*CustomEmoji, error) {
 	id := NewID()
-	_, err := d.Exec(`INSERT INTO custom_emojis (id, name, filename, uploader_id) VALUES (?, ?, ?, ?)`,
-		id, name, filename, uploaderID)
+	// Fetch uploader username for denormalization.
+	uploaderUsername := ""
+	if u, err := s.GetUserByID(uploaderID); err == nil {
+		uploaderUsername = u.Username
+	}
+	_, err := s.server.Exec(
+		`INSERT INTO custom_emojis (id, name, filename, uploader_id, uploader_username) VALUES (?, ?, ?, ?, ?)`,
+		id, name, filename, uploaderID, uploaderUsername)
 	if err != nil {
 		return nil, err
 	}
-	return d.GetCustomEmojiByID(id)
+	return s.GetCustomEmojiByID(id)
 }
 
-func (d *DB) GetCustomEmojiByID(id string) (*CustomEmoji, error) {
+func (s *Store) GetCustomEmojiByID(id string) (*CustomEmoji, error) {
 	e := &CustomEmoji{}
-	err := d.QueryRow(`SELECT id, name, filename, uploader_id, created_at FROM custom_emojis WHERE id = ?`, id).
-		Scan(&e.ID, &e.Name, &e.Filename, &e.UploaderID, &e.CreatedAt)
+	err := s.server.QueryRow(
+		`SELECT id, name, filename, uploader_id, uploader_username, created_at FROM custom_emojis WHERE id = ?`, id).
+		Scan(&e.ID, &e.Name, &e.Filename, &e.UploaderID, &e.UploaderUsername, &e.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
-	e.Uploader, _ = d.GetUserByID(e.UploaderID)
 	return e, nil
 }
 
-func (d *DB) ListCustomEmojis() ([]CustomEmoji, error) {
-	rows, err := d.Query(`SELECT id, name, filename, uploader_id, created_at FROM custom_emojis ORDER BY name ASC`)
+func (s *Store) ListCustomEmojis() ([]CustomEmoji, error) {
+	rows, err := s.server.Query(`SELECT id, name, filename, uploader_id, uploader_username, created_at FROM custom_emojis ORDER BY name ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -32,8 +38,7 @@ func (d *DB) ListCustomEmojis() ([]CustomEmoji, error) {
 	var emojis []CustomEmoji
 	for rows.Next() {
 		var e CustomEmoji
-		rows.Scan(&e.ID, &e.Name, &e.Filename, &e.UploaderID, &e.CreatedAt)
-		e.Uploader, _ = d.GetUserByID(e.UploaderID)
+		rows.Scan(&e.ID, &e.Name, &e.Filename, &e.UploaderID, &e.UploaderUsername, &e.CreatedAt)
 		emojis = append(emojis, e)
 	}
 	if emojis == nil {
@@ -42,20 +47,21 @@ func (d *DB) ListCustomEmojis() ([]CustomEmoji, error) {
 	return emojis, nil
 }
 
-func (d *DB) DeleteCustomEmoji(id string) (string, error) {
+func (s *Store) DeleteCustomEmoji(id string) (string, error) {
 	var filename string
-	err := d.QueryRow(`SELECT filename FROM custom_emojis WHERE id = ?`, id).Scan(&filename)
+	err := s.server.QueryRow(`SELECT filename FROM custom_emojis WHERE id = ?`, id).Scan(&filename)
 	if err != nil {
 		return "", err
 	}
-	_, err = d.Exec(`DELETE FROM custom_emojis WHERE id = ?`, id)
+	_, err = s.server.Exec(`DELETE FROM custom_emojis WHERE id = ?`, id)
 	return filename, err
 }
 
-func (d *DB) GetCustomEmojiByName(name string) (*CustomEmoji, error) {
+func (s *Store) GetCustomEmojiByName(name string) (*CustomEmoji, error) {
 	e := &CustomEmoji{}
-	err := d.QueryRow(`SELECT id, name, filename, uploader_id, created_at FROM custom_emojis WHERE name = ?`, name).
-		Scan(&e.ID, &e.Name, &e.Filename, &e.UploaderID, &e.CreatedAt)
+	err := s.server.QueryRow(
+		`SELECT id, name, filename, uploader_id, uploader_username, created_at FROM custom_emojis WHERE name = ?`, name).
+		Scan(&e.ID, &e.Name, &e.Filename, &e.UploaderID, &e.UploaderUsername, &e.CreatedAt)
 	if err != nil {
 		return nil, err
 	}

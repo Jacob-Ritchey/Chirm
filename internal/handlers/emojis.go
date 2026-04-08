@@ -16,7 +16,7 @@ import (
 
 // ListCustomEmojis returns all custom emojis (any authenticated user).
 func (h *Handler) ListCustomEmojis(w http.ResponseWriter, r *http.Request) {
-	emojis, err := h.db.ListCustomEmojis()
+	emojis, err := h.store.ListCustomEmojis()
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list emojis")
 		return
@@ -90,7 +90,7 @@ func (h *Handler) UploadCustomEmoji(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	emoji, err := h.db.CreateCustomEmoji(name, filename, u.ID)
+	emoji, err := h.store.CreateCustomEmoji(name, filename, u.ID)
 	if err != nil {
 		os.Remove(filepath.Join(uploadsDir, filename))
 		if strings.Contains(err.Error(), "UNIQUE") {
@@ -113,7 +113,7 @@ func (h *Handler) DeleteCustomEmoji(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := chi.URLParam(r, "id")
-	filename, err := h.db.DeleteCustomEmoji(id)
+	filename, err := h.store.DeleteCustomEmoji(id)
 	if err != nil {
 		errResp(w, http.StatusNotFound, "emoji not found")
 		return

@@ -15,7 +15,7 @@ import (
 )
 
 type Handler struct {
-	db            *db.DB
+	store         *db.Store
 	auth          *auth.Service
 	hub           *hub.Hub
 	bus           *events.Bus
@@ -23,8 +23,8 @@ type Handler struct {
 	allowedOrigin string
 }
 
-func New(database *db.DB, authSvc *auth.Service, h *hub.Hub, bus *events.Bus, dataDir, allowedOrigin string) *Handler {
-	return &Handler{db: database, auth: authSvc, hub: h, bus: bus, dataDir: dataDir, allowedOrigin: allowedOrigin}
+func New(store *db.Store, authSvc *auth.Service, h *hub.Hub, bus *events.Bus, dataDir, allowedOrigin string) *Handler {
+	return &Handler{store: store, auth: authSvc, hub: h, bus: bus, dataDir: dataDir, allowedOrigin: allowedOrigin}
 }
 
 // makeUpgrader builds a WebSocket upgrader that validates the Origin header.
@@ -108,7 +108,7 @@ func (h *Handler) currentUser(r *http.Request) (*db.User, error) {
 	if claims == nil {
 		return nil, nil
 	}
-	return h.db.GetUserByID(claims.UserID)
+	return h.store.GetUserByID(claims.UserID)
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (*db.User, bool) {
@@ -117,7 +117,7 @@ func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (*db.User
 		errResp(w, http.StatusUnauthorized, "unauthorized")
 		return nil, false
 	}
-	if !u.IsOwner && !h.db.HasPermission(u, db.PermAdministrator) {
+	if !u.IsOwner && !h.store.HasPermission(u, db.PermAdministrator) {
 		errResp(w, http.StatusForbidden, "insufficient permissions")
 		return nil, false
 	}
@@ -133,13 +133,12 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate single-use CSRF token passed as ?csrf=<token>.
 	csrfToken := r.URL.Query().Get("csrf")
 	if csrfToken == "" {
 		http.Error(w, "missing csrf token", http.StatusForbidden)
 		return
 	}
-	ownerID, err := h.db.ConsumeCSRFToken(csrfToken)
+	ownerID, err := h.store.ConsumeCSRFToken(csrfToken)
 	if err != nil {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
@@ -163,14 +162,13 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // IssueCSRFToken issues a short-lived single-use CSRF token for the current user.
-// The client must pass this as ?csrf=<token> on the WebSocket URL.
 func (h *Handler) IssueCSRFToken(w http.ResponseWriter, r *http.Request) {
 	claims := mw.GetClaims(r)
 	if claims == nil {
 		errResp(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	token, err := h.db.IssueCSRFToken(claims.UserID)
+	token, err := h.store.IssueCSRFToken(claims.UserID)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to issue token")
 		return

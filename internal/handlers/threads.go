@@ -13,13 +13,13 @@ import (
 
 func (h *Handler) ListThreads(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
-	if _, err := h.db.GetChannelByID(channelID); err != nil {
+	if _, err := h.store.GetChannelByID(channelID); err != nil {
 		errResp(w, http.StatusNotFound, "channel not found")
 		return
 	}
 
 	before, limit := parsePagination(r)
-	threads, err := h.db.ListThreadsByChannel(channelID, before, limit+1)
+	threads, err := h.store.ListThreadsByChannel(channelID, before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list threads")
 		return
@@ -40,13 +40,13 @@ func (h *Handler) CreateThread(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	if !h.db.HasPermission(u, db.PermSendMessages) {
+	if !h.store.HasPermission(u, db.PermSendMessages) {
 		errResp(w, http.StatusForbidden, "no permission to create threads")
 		return
 	}
 
 	channelID := chi.URLParam(r, "id")
-	if _, err := h.db.GetChannelByID(channelID); err != nil {
+	if _, err := h.store.GetChannelByID(channelID); err != nil {
 		errResp(w, http.StatusNotFound, "channel not found")
 		return
 	}
@@ -67,44 +67,34 @@ func (h *Handler) CreateThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate source message belongs to this channel
+	// Validate source message belongs to this channel.
 	if req.SourceMessageID != nil {
-		srcMsg, err := h.db.GetMessageByID(*req.SourceMessageID)
+		srcMsg, err := h.store.GetMessageByID(*req.SourceMessageID)
 		if err != nil || srcMsg.ChannelID != channelID {
 			errResp(w, http.StatusBadRequest, "source message not found in channel")
 			return
 		}
 	}
 
-	thread, err := h.db.CreateThread(channelID, req.Name, u.ID, req.SourceMessageID)
+	thread, err := h.store.CreateThread(channelID, req.Name, u.ID, req.SourceMessageID)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create thread")
 		return
 	}
 
 	// Create the post body as the first message in the thread's own channel.
-	// Must use thread.ThreadChannelID (not channelID) and CreateMessage (not CreateThreadMessage)
-	// because GetMessages filters WHERE thread_id IS NULL — CreateThreadMessage sets thread_id.
 	content := strings.TrimSpace(req.InitialMessage)
 	if content != "" || len(req.Attachments) > 0 {
-		var msg *db.Message
-		var msgErr error
-		if thread.ThreadChannelID != "" {
-			msg, msgErr = h.db.CreateMessage(thread.ThreadChannelID, u.ID, content, nil)
-			if msgErr == nil {
-				h.db.IncrementThreadMessageCount(thread.ID)
-			}
-		} else {
-			// Legacy fallback (thread_channel_id should always be set by CreateThread)
-			msg, msgErr = h.db.CreateThreadMessage(thread.ID, channelID, u.ID, content, nil)
-		}
+		// thread.ID === thread.ThreadChannelID in the new architecture.
+		msg, msgErr := h.store.CreateMessage(thread.ID, u.ID, content, nil)
 		if msgErr == nil {
 			for _, attID := range req.Attachments {
 				if attID != "" {
-					h.db.LinkAttachment(attID, msg.ID)
+					h.store.LinkAttachment(attID, msg.ID, thread.ID)
 				}
 			}
-			thread, _ = h.db.GetThreadByID(thread.ID)
+			h.store.IncrementThreadMessageCount(thread.ID, channelID)
+			thread, _ = h.store.GetThreadByID(thread.ID)
 		}
 	}
 
@@ -127,20 +117,19 @@ func (h *Handler) DeleteThread(w http.ResponseWriter, r *http.Request) {
 	}
 
 	threadID := chi.URLParam(r, "id")
-	thread, err := h.db.GetThreadByID(threadID)
+	thread, err := h.store.GetThreadByID(threadID)
 	if err != nil {
 		errResp(w, http.StatusNotFound, "thread not found")
 		return
 	}
 
-	// Must be thread creator or have manage messages permission
-	if thread.CreatorID != u.ID && !h.db.HasPermission(u, db.PermManageMessages) {
+	if thread.CreatorID != u.ID && !h.store.HasPermission(u, db.PermManageMessages) {
 		errResp(w, http.StatusForbidden, "cannot delete this thread")
 		return
 	}
 
 	channelID := thread.ChannelID
-	if err := h.db.DeleteThread(threadID); err != nil {
+	if err := h.store.DeleteThread(threadID); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to delete thread")
 		return
 	}
@@ -157,10 +146,9 @@ func (h *Handler) DeleteThread(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetThreadFirstMessage returns the first (oldest) message in a thread's channel.
-// Used by forum/gallery preview cards so the preview never changes after replies are sent.
 func (h *Handler) GetThreadFirstMessage(w http.ResponseWriter, r *http.Request) {
 	threadID := chi.URLParam(r, "id")
-	msg, err := h.db.GetThreadFirstMessage(threadID)
+	msg, err := h.store.GetThreadFirstMessage(threadID)
 	if err != nil {
 		ok(w, map[string]interface{}{"message": nil})
 		return
@@ -170,22 +158,15 @@ func (h *Handler) GetThreadFirstMessage(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) GetThreadMessages(w http.ResponseWriter, r *http.Request) {
 	threadID := chi.URLParam(r, "id")
-	thread, err := h.db.GetThreadByID(threadID)
-	if err != nil {
+	// Validate thread exists.
+	if _, err := h.store.GetThreadByID(threadID); err != nil {
 		errResp(w, http.StatusNotFound, "thread not found")
 		return
 	}
 
 	before, limit := parsePagination(r)
-
-	var msgs []db.Message
-	if thread.ThreadChannelID != "" {
-		// New architecture: messages live in the thread's own channel.
-		msgs, err = h.db.GetMessages(thread.ThreadChannelID, before, limit+1)
-	} else {
-		// Legacy fallback.
-		msgs, err = h.db.GetThreadMessages(threadID, before, limit+1)
-	}
+	// thread_id === thread_channel_id — messages live in channels/{threadID}.db
+	msgs, err := h.store.GetMessages(threadID, before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to get thread messages")
 		return
@@ -206,13 +187,13 @@ func (h *Handler) SendThreadMessage(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	if !h.db.HasPermission(u, db.PermSendMessages) {
+	if !h.store.HasPermission(u, db.PermSendMessages) {
 		errResp(w, http.StatusForbidden, "no permission to send messages")
 		return
 	}
 
 	threadID := chi.URLParam(r, "id")
-	thread, err := h.db.GetThreadByID(threadID)
+	thread, err := h.store.GetThreadByID(threadID)
 	if err != nil {
 		errResp(w, http.StatusNotFound, "thread not found")
 		return
@@ -237,14 +218,8 @@ func (h *Handler) SendThreadMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var msg *db.Message
-	if thread.ThreadChannelID != "" {
-		// New architecture: store as a regular channel message in the thread's own channel.
-		msg, err = h.db.CreateMessage(thread.ThreadChannelID, u.ID, req.Content, req.ReplyToID)
-	} else {
-		// Legacy fallback.
-		msg, err = h.db.CreateThreadMessage(threadID, thread.ChannelID, u.ID, req.Content, req.ReplyToID)
-	}
+	// thread.ID === thread.ThreadChannelID — store message in thread's own channel DB.
+	msg, err := h.store.CreateMessage(thread.ID, u.ID, req.Content, req.ReplyToID)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to send message")
 		return
@@ -252,41 +227,41 @@ func (h *Handler) SendThreadMessage(w http.ResponseWriter, r *http.Request) {
 
 	for _, attID := range req.Attachments {
 		if attID != "" {
-			h.db.LinkAttachment(attID, msg.ID)
+			h.store.LinkAttachment(attID, msg.ID, thread.ID)
 		}
 	}
 	if len(req.Attachments) > 0 {
-		if full, err := h.db.GetMessageByID(msg.ID); err == nil {
+		if full, err := h.store.GetMessageByID(msg.ID); err == nil {
 			msg = full
 		}
 	}
 
-	authorName := "Someone"
-	if msg.Author != nil {
-		authorName = msg.Author.Username
+	authorName := msg.AuthorUsername
+	if authorName == "" {
+		authorName = "Someone"
 	}
 	contentPreview := msg.Content
 	if len(contentPreview) > 120 {
 		contentPreview = contentPreview[:120] + "…"
 	}
 
-	if thread.ThreadChannelID != "" {
-		// New architecture: fire MessageCreated so thread-channel subscribers get message.new,
-		// then fire ThreadMessageCreated so parent-channel subscribers can update reply counts.
-		h.db.IncrementThreadMessageCount(thread.ID)
-		h.bus.Publish(events.Event{
-			Type: events.MessageCreated,
-			Data: events.MessageCreatedData{
-				Message:        msg,
-				ChannelID:      thread.ThreadChannelID,
-				ChannelName:    thread.Name,
-				AuthorID:       u.ID,
-				AuthorName:     authorName,
-				ContentPreview: contentPreview,
-			},
-		})
-	}
+	// Update thread message counts.
+	h.store.IncrementThreadMessageCount(thread.ID, thread.ChannelID)
 
+	// Broadcast message.new to thread channel subscribers.
+	h.bus.Publish(events.Event{
+		Type: events.MessageCreated,
+		Data: events.MessageCreatedData{
+			Message:        msg,
+			ChannelID:      thread.ID,
+			ChannelName:    thread.Name,
+			AuthorID:       u.ID,
+			AuthorName:     authorName,
+			ContentPreview: contentPreview,
+		},
+	})
+
+	// Also fire thread.message.new so parent-channel subscribers update reply counts.
 	h.bus.Publish(events.Event{
 		Type: events.ThreadMessageCreated,
 		Data: events.ThreadMessageCreatedData{
