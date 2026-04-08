@@ -2,6 +2,7 @@ package db
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"time"
 )
@@ -31,16 +32,21 @@ func (d *DB) IssueCSRFToken(userID string) (string, error) {
 }
 
 // ConsumeCSRFToken validates and deletes a CSRF token. Returns the owning
-// userID on success, empty string if the token is unknown or expired.
-func (d *DB) ConsumeCSRFToken(token string) string {
+// userID on success, empty string if the token is unknown or expired, and a
+// non-nil error if the lookup failed due to a database error (distinct from an
+// invalid token so callers can return 503 rather than 403).
+func (d *DB) ConsumeCSRFToken(token string) (string, error) {
 	var userID string
 	err := d.QueryRow(
 		`SELECT user_id FROM csrf_tokens WHERE token = ? AND expires_at > CURRENT_TIMESTAMP`,
 		token,
 	).Scan(&userID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
 	if err != nil {
-		return ""
+		return "", err
 	}
 	d.Exec(`DELETE FROM csrf_tokens WHERE token = ?`, token)
-	return userID
+	return userID, nil
 }

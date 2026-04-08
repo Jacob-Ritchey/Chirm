@@ -89,6 +89,7 @@ async function loadPublicSettings() {
 // real content immediately before the API calls finish.
 
 const _STRUCT_KEY = 'chirm_struct';
+let _wsFirstConnectDone = false;
 
 function _saveStructCache() {
   try {
@@ -152,12 +153,18 @@ async function init() {
   }
 
   // Phase 2 — non-essential: load members, roles, emojis, voice in background.
-  Promise.all([loadMembers(), loadRoles(), loadVoiceRooms(), loadCustomEmojis()])
-    .then(() => {
+  // Sequential rather than concurrent to avoid bursting the DB with simultaneous
+  // writes immediately after page load.
+  (async () => {
+    try {
+      await loadMembers();
+      await loadRoles();
+      await loadVoiceRooms();
+      await loadCustomEmojis();
       renderMembersList();
       _saveStructCache();
-    })
-    .catch(() => {});
+    } catch {}
+  })();
 
   setTimeout(async () => {
     if (Notification.permission === 'default') {
@@ -248,6 +255,7 @@ async function openChannel(ch) {
 
   // ── Forum / Gallery channels ───────────────────────────────────────────
   if (ch.type === 'forum' || ch.type === 'gallery') {
+    if (App.currentChannel?.id === ch.id) return;
     App.currentChannel = ch;
     App.unread.delete(ch.id);
     _persistUnread();
@@ -274,10 +282,18 @@ async function openChannel(ch) {
     } else {
       await renderForumView(ch);
     }
+    // Retry if render failed and WS was already connected before the fetch ran (Case 2 race)
+    if (_wsFirstConnectDone && App.currentChannel?.id === ch.id && document.querySelector('.forum-error')) {
+      if (ch.type === 'gallery') renderGalleryView(ch);
+      else renderForumView(ch);
+      _retryForumIfFailed(ch);
+    }
     return;
   }
 
   // ── Text channel ───────────────────────────────────────────────────────
+  if (App.currentChannel?.id === ch.id) return;
+
   // Restore channel-specific UI that may have been hidden by forum/gallery view
   document.getElementById('message-input-area').style.display = '';
   document.getElementById('typing-indicator').style.display = '';
@@ -362,18 +378,42 @@ async function openChannel(ch) {
   });
 }
 
+// ─── FORUM / GALLERY RESILIENT RETRY ─────────────────────────────────────────
+// Schedules a follow-up render attempt after `delay` ms. Guards against transient
+// server-side 500s that outlast the initial WS-connected retry.
+function _retryForumIfFailed(ch, delay = 3000) {
+  setTimeout(() => {
+    if (App.currentChannel?.id !== ch.id || !document.querySelector('.forum-error')) return;
+    if (ch.type === 'gallery') renderGalleryView(ch);
+    else renderForumView(ch);
+  }, delay);
+}
+
 // ─── WEBSOCKET HANDLERS ───────────────────────────────────────────────────────
 function setupWSHandlers() {
   // On reconnect (not the initial connect), refresh structural data and invalidate
   // the message cache — we may have missed channel/settings/message events while down.
-  let _wsHasConnectedOnce = false;
   WS.on('ws.connected', async () => {
-    if (!_wsHasConnectedOnce) { _wsHasConnectedOnce = true; return; }
+    if (!_wsFirstConnectDone) {
+      _wsFirstConnectDone = true;
+      // If the forum/gallery failed to load before WS auth completed, retry now.
+      const ch = App.currentChannel;
+      if (ch && (ch.type === 'forum' || ch.type === 'gallery') && document.querySelector('.forum-error')) {
+        if (ch.type === 'gallery') {
+          renderGalleryView(ch);
+        } else {
+          renderForumView(ch);
+        }
+        _retryForumIfFailed(ch);
+      }
+      return;
+    }
     ChirmCache.clearAll();
-    await Promise.all([loadChannels(), loadPublicSettings()]).catch(() => {});
+    await Promise.all([loadChannels(), loadPublicSettings(), loadMembers()]).catch(() => {});
     ChirmTheme.loadServerTheme(App.publicSettings);
     renderServerHeader();
     renderChannelList();
+    renderMembersList();
     _saveStructCache();
   });
 

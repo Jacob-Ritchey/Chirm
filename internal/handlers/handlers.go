@@ -139,7 +139,11 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing csrf token", http.StatusForbidden)
 		return
 	}
-	ownerID := h.db.ConsumeCSRFToken(csrfToken)
+	ownerID, err := h.db.ConsumeCSRFToken(csrfToken)
+	if err != nil {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if ownerID == "" || ownerID != claims.UserID {
 		http.Error(w, "invalid or expired csrf token", http.StatusForbidden)
 		return

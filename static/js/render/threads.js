@@ -161,6 +161,30 @@ export async function sendThreadMessage() {
   input.value = '';
   resizeInput(input);
 
+  const threadId = App.currentThread.id;
+  if (!App.threadMessages[threadId]) App.threadMessages[threadId] = [];
+
+  const tempId = 'pending_' + Date.now();
+  const prev = App.threadMessages[threadId].at(-1);
+  const tempMsg = {
+    id: tempId,
+    thread_id: threadId,
+    user_id: App.user?.id,
+    content,
+    author: App.user ? { username: App.user.username, avatar: App.user.avatar, color: App.user.color } : {},
+    created_at: new Date().toISOString(),
+    pending: true,
+  };
+  App.threadMessages[threadId].push(tempMsg);
+  const list = document.getElementById('thread-messages-list');
+  if (list) {
+    list.querySelector('.thread-empty')?.remove();
+    const prevTs = prev ? new Date(prev.created_at).getTime() : 0;
+    const continued = !!prev && prev.user_id === tempMsg.user_id && Date.now() - prevTs < 5 * 60 * 1000;
+    list.appendChild(renderMessage(tempMsg, continued));
+    if (_isThreadNearBottom()) _scrollThreadToBottom();
+  }
+
   try {
     const body = { content };
     if (App.threadReplyTo) {
@@ -174,10 +198,22 @@ export async function sendThreadMessage() {
     const endpoint = App.currentThread.thread_channel_id
       ? `/api/v1/channels/${App.currentThread.thread_channel_id}/messages`
       : `/api/v1/threads/${App.currentThread.id}/messages`;
-    await api.post(endpoint, body);
+    const msg = await api.post(endpoint, body);
+    if (msg?.id) {
+      const tempIdx = App.threadMessages[threadId].findIndex(m => m.id === tempId);
+      if (tempIdx >= 0) {
+        App.threadMessages[threadId][tempIdx] = msg;
+        const domEl = document.querySelector(`[data-message-id="${tempId}"]`);
+        if (domEl) domEl.replaceWith(renderMessage(msg, domEl.classList.contains('continued')));
+      }
+    }
   } catch (e) {
     toast(e.message || 'Failed to send', 'error');
     input.value = content;
+    const tempIdx = App.threadMessages[threadId].findIndex(m => m.id === tempId);
+    if (tempIdx >= 0) App.threadMessages[threadId].splice(tempIdx, 1);
+    const domEl = document.querySelector(`[data-message-id="${tempId}"]`);
+    if (domEl) domEl.remove();
   }
 }
 
@@ -508,7 +544,8 @@ export function openCreatePostModal(channel) {
       const thread = await api.post(`/api/v1/channels/${channel.id}/threads`, body);
       if (thread?.id) {
         openThreadPanel(thread);
-        // Forum/gallery view is updated via the thread.new WS event
+        if (channel.type === 'forum') prependForumCard(channel, thread);
+        else if (channel.type === 'gallery') prependGalleryCard(channel, thread);
       }
     } catch (e) {
       toast(e.message || 'Failed to create post', 'error');
@@ -599,6 +636,7 @@ export async function renderGalleryView(channel) {
     msgsList.innerHTML = '';
     const grid = document.createElement('div');
     grid.className = 'gallery-grid';
+    msgsList.appendChild(grid);
 
     for (const thread of threads) {
       let firstMsg = null;
@@ -606,10 +644,9 @@ export async function renderGalleryView(channel) {
         const msgData = await api.get(`/api/v1/threads/${thread.id}/first-message`);
         firstMsg = msgData?.message || null;
       } catch {}
+      if (App.currentChannel?.id !== channel.id) { grid.remove(); return; }
       grid.appendChild(renderGalleryCard(thread, firstMsg));
     }
-    if (App.currentChannel?.id !== channel.id) return;
-    msgsList.appendChild(grid);
   } catch (e) {
     msgsList.innerHTML = '<div class="forum-error">Failed to load gallery.</div>';
   }
@@ -688,8 +725,16 @@ async function _scheduleGalleryLinkMedia(card, content) {
 
 export async function prependForumCard(channel, thread) {
   if (App.currentChannel?.id !== channel.id) return;
-  const container = document.querySelector('.forum-posts-list');
-  if (!container) return;
+  let container = document.querySelector('.forum-posts-list');
+  if (!container) {
+    // First post on an empty channel — replace the empty-state with a fresh list
+    const msgsList = document.getElementById('messages-list');
+    if (!msgsList) return;
+    container = document.createElement('div');
+    container.className = 'forum-posts-list';
+    msgsList.innerHTML = '';
+    msgsList.appendChild(container);
+  }
   if (container.querySelector(`[data-thread-id="${thread.id}"]`)) return;
   let firstMsg = null;
   try {
@@ -703,17 +748,29 @@ export async function prependForumCard(channel, thread) {
 
 export async function prependGalleryCard(channel, thread) {
   if (App.currentChannel?.id !== channel.id) return;
-  const grid = document.querySelector('.gallery-grid');
-  if (!grid) return;
+  let grid = document.querySelector('.gallery-grid');
+  if (!grid) {
+    // First post on an empty channel — replace the empty-state with a fresh grid
+    const msgsList = document.getElementById('messages-list');
+    if (!msgsList) return;
+    grid = document.createElement('div');
+    grid.className = 'gallery-grid';
+    msgsList.innerHTML = '';
+    msgsList.appendChild(grid);
+  }
   if (grid.querySelector(`[data-thread-id="${thread.id}"]`)) return;
+  const card = renderGalleryCard(thread, null);
+  grid.prepend(card);
   let firstMsg = null;
   try {
     const msgData = await api.get(`/api/v1/threads/${thread.id}/messages?limit=1`);
     firstMsg = (msgData?.messages || [])[0] || null;
   } catch {}
-  if (App.currentChannel?.id !== channel.id) return;
-  if (grid.querySelector(`[data-thread-id="${thread.id}"]`)) return;
-  grid.prepend(renderGalleryCard(thread, firstMsg));
+  if (firstMsg) {
+    if (App.currentChannel?.id !== channel.id) return;
+    const existing = grid.querySelector(`[data-thread-id="${thread.id}"]`);
+    if (existing) existing.replaceWith(renderGalleryCard(thread, firstMsg));
+  }
 }
 
 // ─── THREAD WS MESSAGE APPEND ─────────────────────────────────────────────────
@@ -730,6 +787,19 @@ export function appendThreadMessage(msg) {
 
   const threadId = thread.id;
   if (!App.threadMessages[threadId]) App.threadMessages[threadId] = [];
+
+  // Resolve a pending placeholder if this is our own message echoed back
+  if (msg.user_id === App.user?.id) {
+    const pendingIdx = App.threadMessages[threadId].findIndex(m => m.pending);
+    if (pendingIdx >= 0) {
+      const pendingId = App.threadMessages[threadId][pendingIdx].id;
+      App.threadMessages[threadId][pendingIdx] = msg;
+      const el = document.querySelector(`[data-message-id="${pendingId}"]`);
+      if (el) el.replaceWith(renderMessage(msg, el.classList.contains('continued')));
+      return;
+    }
+  }
+
   if (App.threadMessages[threadId].find(m => m.id === msg.id)) return;
 
   const prev = App.threadMessages[threadId].at(-1);

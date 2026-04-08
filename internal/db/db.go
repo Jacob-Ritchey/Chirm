@@ -25,7 +25,7 @@ type DB struct {
 }
 
 func Init(path string) (*DB, error) {
-	sqldb, err := sql.Open("sqlite", path+"?_foreign_keys=on&_journal_mode=WAL")
+	sqldb, err := sql.Open("sqlite", path+"?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, err
 	}

@@ -414,9 +414,27 @@ export function clearReply() {
 // ─── REACTIONS ────────────────────────────────────────────────────────────────
 
 export async function toggleReaction(messageId, emoji) {
-  const msg = (App.messages[App.currentChannel?.id] || []).find(m => m.id === messageId);
-  const reaction = msg?.reactions?.find(r => r.emoji === emoji);
-  const alreadyReacted = reaction?.user_ids?.includes(App.user?.id);
+  const channelId = App.currentChannel?.id;
+  const msg = (App.messages[channelId] || []).find(m => m.id === messageId);
+  const originalReactions = msg ? JSON.parse(JSON.stringify(msg.reactions || [])) : null;
+  const alreadyReacted = originalReactions?.find(r => r.emoji === emoji)?.user_ids?.includes(App.user?.id);
+
+  if (msg) {
+    const reactions = JSON.parse(JSON.stringify(msg.reactions || []));
+    const existing = reactions.find(r => r.emoji === emoji);
+    if (alreadyReacted) {
+      existing.user_ids = existing.user_ids.filter(id => id !== App.user.id);
+      existing.count = Math.max(0, existing.count - 1);
+      if (existing.count === 0) reactions.splice(reactions.indexOf(existing), 1);
+    } else if (existing) {
+      existing.user_ids = [...existing.user_ids, App.user.id];
+      existing.count++;
+    } else {
+      reactions.push({ emoji, count: 1, user_ids: [App.user.id] });
+    }
+    msg.reactions = reactions;
+    updateReactionsInDOM(messageId, reactions);
+  }
 
   try {
     if (alreadyReacted) {
@@ -428,6 +446,10 @@ export async function toggleReaction(messageId, emoji) {
       await api.post(`/api/v1/messages/${messageId}/reactions`, { emoji });
     }
   } catch (e) {
+    if (msg && originalReactions !== null) {
+      msg.reactions = originalReactions;
+      updateReactionsInDOM(messageId, originalReactions);
+    }
     toast(e.message, 'error');
   }
 }
