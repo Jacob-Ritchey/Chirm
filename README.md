@@ -47,7 +47,7 @@ alt="Jenn The Wren">
 
 - **File uploads** — images, video, audio, PDFs, text, and ZIP archives
 - **Inline previews** — images, video, and audio render directly in chat
-- **Configurable size limit** — set max upload size per server (default 25 MB)
+- **Configurable size limit** — set max upload size per server (default 50 MB, adjustable in admin panel)
 - **Per-user storage quotas** — set a cap on how much each user can upload
 - **Orphan cleanup** — background job removes uploaded files never attached to a message
 
@@ -66,8 +66,9 @@ alt="Jenn The Wren">
 - **Invite system** — generate codes with optional max-use and expiry, or leave registration open
 - **User management** — ban, delete, or reassign roles from the admin panel
 - **Server customization** — upload a server icon and login background
-- **User avatars** — each member can upload their own profile image
+- **User profiles** — avatar, banner, bio, and links for each member
 - **Channel emoji** — assign an emoji icon to any channel
+- **Theme customization** — create custom color themes from the admin panel
 - **Bot API** — create token-scoped bots that can post messages via the REST API
 - **Audit logging** — optional structured audit log with configurable per-day retention
 - **TOTP / 2FA** — enable time-based one-time passwords on your account for an extra login step; backup codes included
@@ -78,10 +79,12 @@ alt="Jenn The Wren">
 - **SQLite + WAL** — four isolated databases (server, members, auth, per-channel), zero-setup, easy backups
 - **Auto-TLS** — generates a persistent local CA and signed server certificate on first run; serves the CA at `/ca-cert` for one-click device trust
 - **Custom TLS** — bring your own certs (Let's Encrypt, Tailscale, mkcert) via env vars or `certs/` directory
+- **Encryption at rest** — optionally encrypt uploaded files and sensitive fields with AES-256-GCM via `CHIRM_ENCRYPTION_KEY`
 - **Per-IP rate limiting** — auth endpoints are throttled to prevent brute-force
 - **WebSocket message limits** — 64 KB cap prevents memory-exhaustion attacks
 - **Docker ready** — multi-stage Dockerfile and compose file included
 - **ARM compatible** — pure Go (no CGO), runs natively on Raspberry Pi
+- **Plugin system** — sandboxed plugin interface for extending functionality
 - **Healthcheck** — Docker healthcheck pings `/api/setup/status`
 
 ---
@@ -90,7 +93,7 @@ alt="Jenn The Wren">
 
 **Requirements:** Go 1.22+
 
-## Docker Setup (Recommended)
+### Docker Setup (Recommended)
 
 ```bash
 git clone https://github.com/Jacob-Ritchey/Chirm
@@ -124,6 +127,7 @@ Open `https://localhost:8443` (accept the self-signed cert via advanced settings
 | Variable | Default | Description |
 | --- | --- | --- |
 | `JWT_SECRET` | *(required)* | Secret for signing JWTs — generate with `openssl rand -hex 32` |
+| `CHIRM_ENCRYPTION_KEY` | *(disabled)* | 64 hex chars (32 bytes) for optional AES-256-GCM encryption at rest — generate with `openssl rand -hex 32` |
 | `PORT` | `8080` | HTTP listen port |
 | `HTTPS_PORT` | `8443` | HTTPS listen port |
 | `DATA_DIR` | `./data` | Directory for SQLite databases and uploads |
@@ -182,56 +186,79 @@ Generate invite links in the Admin Panel → Invites tab. Each invite can have a
 
 ```
 chirm/
-├── main.go                      Entry point, router, TLS, .env loader
-├── .env.example                 Documented env var template
+├── main.go                        Entry point, router, TLS, .env loader
+├── .env.example                   Documented env var template
 ├── internal/
-│   ├── auth/auth.go             JWT generation, bcrypt hashing, TOTP
+│   ├── auth/
+│   │   ├── auth.go                JWT generation, bcrypt hashing, token validation
+│   │   └── totp.go                TOTP secret generation & validation
+│   ├── config/config.go           Environment variable parsing, .env loader
+│   ├── crypto/crypto.go           AES-256-GCM encryption, HKDF key derivation
 │   ├── db/
-│   │   ├── store.go             Store struct, New(), permission constants, NewID()
-│   │   ├── channel_store.go     ChannelStore — lazy-open per-channel *sql.DB cache
-│   │   ├── migrate.go           Embedded migration runner (server/members/auth/channel)
-│   │   ├── models.go            Shared types: User, Channel, Message, Thread, Bot …
-│   │   ├── messages.go          Message / attachment / reaction queries (channel DBs)
-│   │   ├── threads.go           Thread create/list/delete, thread_index maintenance
-│   │   ├── channels.go          Channel + category CRUD (server.db)
-│   │   ├── users.go / roles.go  User and role queries (members.db)
-│   │   ├── bots.go              Bot token management (server.db)
-│   │   ├── csrf.go / totp.go …  Auth-tier queries (auth.db)
-│   │   └── propagate.go         PropagateProfileUpdate, PropagateBotRename, ReconcileStorageUsed
-│   ├── events/                  Domain event bus (types + pub/sub)
-│   ├── hub/                     WebSocket hub, voice rooms
-│   ├── middleware/middleware.go  JWT + bot-token auth middleware
-│   ├── plugin/plugin.go         Plugin interface and sandboxed context
+│   │   ├── store.go               Store struct, New(), permission constants, NewID()
+│   │   ├── channel_store.go       ChannelStore — lazy-open per-channel *sql.DB cache
+│   │   ├── migrate.go             Embedded migration runner (server/members/auth/channel)
+│   │   ├── models.go              Shared types: User, Channel, Message, Thread, Bot …
+│   │   ├── messages.go            Message / attachment / reaction queries (channel DBs)
+│   │   ├── threads.go             Thread create/list/delete, thread_index maintenance
+│   │   ├── channels.go            Channel + category CRUD (server.db)
+│   │   ├── users.go / roles.go    User and role queries (members.db)
+│   │   ├── bots.go                Bot token management (server.db)
+│   │   ├── csrf.go / totp.go …    Auth-tier queries (auth.db)
+│   │   └── propagate.go           PropagateProfileUpdate, PropagateBotRename, ReconcileStorageUsed
+│   ├── events/                    Domain event bus (types + pub/sub)
+│   ├── hub/                       WebSocket hub, voice rooms
+│   ├── logger/logger.go           Audit logging with daily rotation
+│   ├── middleware/
+│   │   ├── middleware.go          JWT + bot-token auth, security headers
+│   │   └── ratelimit.go          Per-IP rate limiting
+│   ├── plugin/
+│   │   ├── plugin.go              Plugin interface and sandboxed context
+│   │   └── registry.go            Plugin registry
+│   ├── router/router.go           Route registration (/api/v1/*)
 │   └── handlers/
-│       ├── handlers.go          Handler struct, WS upgrader, helpers
-│       ├── hub.go               WebSocket message dispatch, voice rooms, WebRTC relay
-│       ├── setup.go             First-run setup
-│       ├── auth.go              Login, register, logout, TOTP, profile update
-│       ├── channels.go          Channel & category CRUD, reordering
-│       ├── messages.go          Message CRUD, replies, reactions, pagination
-│       ├── threads.go           Thread CRUD, thread message send/list
-│       ├── users.go             User & role management, invites, settings
-│       ├── bots.go              Bot management (admin)
-│       ├── uploads.go           File upload with MIME validation
-│       ├── emojis.go            Custom emoji upload & management
-│       ├── linkpreview.go       OpenGraph link preview fetcher with cache
-│       └── push.go              VAPID key management, Web Push encryption
+│       ├── handlers.go            Handler struct, WS upgrader, helpers
+│       ├── hub.go                 WebSocket message dispatch, voice rooms, WebRTC relay
+│       ├── setup.go               First-run setup
+│       ├── admin.go               Admin-only operations
+│       ├── auth.go                Login, register, logout, TOTP, profile update
+│       ├── channels.go            Channel & category CRUD, reordering
+│       ├── messages.go            Message CRUD, replies, reactions, pagination
+│       ├── threads.go             Thread CRUD, thread message send/list
+│       ├── users.go               User & role management, invites, settings
+│       ├── bots.go                Bot management (admin)
+│       ├── uploads.go             File upload with MIME validation
+│       ├── emojis.go              Custom emoji upload & management
+│       ├── linkpreview.go         OpenGraph link preview fetcher with cache
+│       └── push.go                VAPID key management, Web Push encryption
 └── static/
-    ├── index.html               Main app shell (SPA)
-    ├── login.html               Login / register page
-    ├── setup.html               Setup wizard
-    ├── manifest.json            PWA manifest
-    ├── sw.js                    Service worker (push, caching)
-    ├── css/app.css              Discord-style dark theme (~2400 lines)
+    ├── index.html                 Main app shell (SPA)
+    ├── login.html                 Login / register page
+    ├── setup.html                 Setup wizard
+    ├── manifest.json              PWA manifest
+    ├── sw.js                      Service worker (push, caching)
+    ├── css/app.css                Discord-style dark theme (~2400 lines)
     └── js/
-        ├── app.js               Application logic, rendering, admin panel (~3000 lines)
-        ├── ws.js                WebSocket client with auto-reconnect
-        ├── voice.js             WebRTC voice/video/screen sharing manager (~1150 lines)
-        ├── notifications.js     Push subscription, in-app toasts, SW coordination
-        ├── mentions.js          @mention autocomplete engine
-        ├── user-settings.js     Local user preferences (mutes, notification prefs)
-        ├── cache.js             Per-channel message cache with TTL & LRU eviction
-        └── emoji-data.js        Built-in emoji dataset
+        ├── app.js                 Application coordinator, boot, event handlers
+        ├── api.js                 HTTP client wrapper
+        ├── ws.js                  WebSocket client with auto-reconnect
+        ├── voice.js               WebRTC voice/video/screen sharing manager (~1150 lines)
+        ├── state.js               Global app state (channels, users, messages)
+        ├── notifications.js       Push subscription, in-app toasts, SW coordination
+        ├── mentions.js            @mention autocomplete engine
+        ├── user-settings.js       Local user preferences (mutes, notification prefs)
+        ├── cache.js               Per-channel message cache with TTL & LRU eviction
+        ├── theme.js               Dark/light mode toggle
+        ├── utils.js               Escaping, formatting, helpers
+        ├── emoji-data.js          Built-in emoji dataset
+        └── render/                UI rendering modules
+            ├── admin.js           Admin panel
+            ├── media.js           Image viewer, upload previews
+            ├── members.js         Member list, status picker
+            ├── messages.js        Message rendering, emoji picker
+            ├── modals.js          Modal dialogs
+            ├── sidebar.js         Channel & category sidebar
+            └── threads.js         Thread panel, forum/gallery views
 ```
 
 Static files are **embedded in the binary** via Go's `//go:embed` directive. Deploying means copying a single file.
@@ -504,6 +531,15 @@ Android and iOS will prompt to add it as a trusted CA.
 | Voice/Video | WebRTC (browser-native), mesh P2P topology |
 | Push | Web Push with VAPID (hand-rolled, zero dependencies) |
 | Frontend | Vanilla HTML/CSS/JS, no build step |
+
+---
+
+## Contributing
+
+1. Fork the repo and create a feature branch
+2. No build tools required for the frontend — edit vanilla HTML/CSS/JS in `static/`
+3. Backend changes: `go build -o chirm . && ./chirm`
+4. Open a pull request describing what you changed and why
 
 ---
 
