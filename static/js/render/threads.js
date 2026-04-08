@@ -370,6 +370,18 @@ export function injectThreadChip(sourceMessageId, thread) {
 
 // ─── PHASE 2: FORUM VIEW ──────────────────────────────────────────────────────
 
+async function deleteThread(threadId, cardEl) {
+  if (!confirm('Delete this post and all its replies? This cannot be undone.')) return;
+  try {
+    await api.del(`/api/v1/threads/${threadId}`);
+    cardEl.remove();
+    if (App.currentThread?.id === threadId) closeThreadPanel();
+    toast('Post deleted', 'success');
+  } catch (e) {
+    toast(e.message || 'Failed to delete post', 'error');
+  }
+}
+
 // Fetches a page of threads using the stable page-based API.
 async function _fetchThreadPage(channelId, page) {
   return api.get(`/api/v1/channels/${channelId}/threads?page=${page}&per_page=20`);
@@ -532,6 +544,15 @@ export function renderForumPostCard(thread, firstMsg) {
       </div>
     </div>
   `;
+
+  if (isAdmin(App.user)) {
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'fpc-delete-btn';
+    deleteBtn.title = 'Delete post';
+    deleteBtn.textContent = '🗑';
+    deleteBtn.onclick = (e) => { e.stopPropagation(); deleteThread(thread.id, card); };
+    card.querySelector('.fpc-header')?.appendChild(deleteBtn);
+  }
 
   // Direct attachment image → open lightbox on click, don't open thread
   if (directImage) {
@@ -748,6 +769,15 @@ export function renderGalleryCard(thread, firstMsg) {
       <span class="gallery-card-stats">💬 ${thread.message_count}</span>
     </div>
   `;
+
+  if (isAdmin(App.user)) {
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'gallery-card-delete-btn';
+    deleteBtn.title = 'Delete post';
+    deleteBtn.textContent = '🗑';
+    deleteBtn.onclick = (e) => { e.stopPropagation(); deleteThread(thread.id, card); };
+    card.querySelector('.gallery-card-overlay')?.appendChild(deleteBtn);
+  }
 
   // Async: use link preview og:image as card media when there's no direct attachment image
   if (!primaryImage && firstMsg?.content) {

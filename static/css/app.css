@@ -2839,6 +2839,20 @@ pre code { background: none; border: none; padding: 0; }
   gap: 8px;
 }
 .fpc-replies { display: flex; align-items: center; gap: 4px; }
+.fpc-delete-btn {
+  display: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+  flex-shrink: 0;
+}
+.forum-post-card:hover .fpc-delete-btn { display: inline-flex; }
+.fpc-delete-btn:hover { color: var(--danger, #e53e3e); background: var(--bg-hover); }
 .forum-loading, .forum-error { padding: 40px 16px; text-align: center; color: var(--text-muted); }
 
 /* ─── Gallery view ────────────────────────────────────────────── */
@@ -2908,6 +2922,20 @@ pre code { background: none; border: none; padding: 0; }
   min-width: 0;
 }
 .gallery-card-stats { font-size: 12px; color: rgba(255,255,255,0.8); flex-shrink: 0; }
+.gallery-card-delete-btn {
+  display: none;
+  background: rgba(0,0,0,0.55);
+  border: none;
+  cursor: pointer;
+  color: #fff;
+  font-size: 14px;
+  padding: 3px 5px;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+  flex-shrink: 0;
+}
+.gallery-card:hover .gallery-card-delete-btn { display: inline-flex; }
+.gallery-card-delete-btn:hover { background: var(--danger, #e53e3e); }
 
 /* Forum / Gallery pagination bar */
 .forum-pagination {
