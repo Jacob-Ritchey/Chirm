@@ -18,7 +18,7 @@ func (s *Store) IssueCSRFToken(userID string) (string, error) {
 		return "", err
 	}
 	token := hex.EncodeToString(b)
-	expires := time.Now().Add(5 * time.Minute)
+	expires := time.Now().UTC().Add(5 * time.Minute)
 
 	_, err := s.auth.Exec(
 		`INSERT INTO csrf_tokens (token, user_id, expires_at) VALUES (?, ?, ?)`,

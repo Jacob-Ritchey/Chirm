@@ -83,14 +83,6 @@ func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 			},
 		})
 
-		h.hub.BroadcastToVoiceRoom(d.ChannelID, hub.WSEvent{
-			Type: "voice.joined",
-			Data: map[string]string{
-				"channel_id": d.ChannelID,
-				"user_id":    c.UserID,
-			},
-		}, c)
-
 		h.hub.Broadcast(hub.WSEvent{
 			Type: "voice.joined",
 			Data: map[string]string{

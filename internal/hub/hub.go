@@ -3,6 +3,7 @@ package hub
 import (
 	"encoding/json"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -211,13 +212,15 @@ func (c *Client) ReadPump(dispatch func(*Client, RawClientMessage)) {
 		if err != nil {
 			break
 		}
-		// Drop messages that exceed the per-connection rate limit.
-		if !c.limiter.Allow() {
-			c.SendEvent(WSEvent{Type: "error", Data: map[string]string{"message": "rate limited"}})
-			continue
-		}
 		var evt RawClientMessage
 		if err := json.Unmarshal(msg, &evt); err != nil {
+			continue
+		}
+		// Voice signaling messages (offer/answer/ICE/join/leave/media_state) fire in
+		// rapid bursts during WebRTC ICE negotiation and must not be rate-limited.
+		// They are already authenticated and bounded by AreInSameVoiceRoom checks.
+		if !strings.HasPrefix(evt.Type, "voice.") && !c.limiter.Allow() {
+			c.SendEvent(WSEvent{Type: "error", Data: map[string]string{"message": "rate limited"}})
 			continue
 		}
 		dispatch(c, evt)

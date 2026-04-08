@@ -24,6 +24,10 @@ const Voice = (() => {
   // peers: userId → { pc, initiator }
   const peers = {};
 
+  // pendingIceCandidates: userId → RTCIceCandidate[]
+  // Buffers candidates that arrive before setRemoteDescription completes.
+  const pendingIceCandidates = {};
+
   // camStateByPeer: userId → bool
   const camStateByPeer = {};
   // screenStateByPeer: userId → bool
@@ -512,6 +516,10 @@ const Voice = (() => {
         type: data.payload.type,
         sdp: preferOpusHighQuality(data.payload.sdp),
       }));
+      if (pendingIceCandidates[uid]?.length) {
+        await Promise.all(pendingIceCandidates[uid].map(c => pc.addIceCandidate(c).catch(() => {})));
+        delete pendingIceCandidates[uid];
+      }
       const answer = await pc.createAnswer();
       const sdp = preferOpusHighQuality(answer.sdp);
       await pc.setLocalDescription({ type: answer.type, sdp });
@@ -537,8 +545,14 @@ const Voice = (() => {
 
   async function onIce(data) {
     if (data.channel_id !== currentChannelId) return;
-    const pc = peers[data.from_user_id]?.pc;
+    const uid = data.from_user_id;
+    const pc = peers[uid]?.pc;
     if (!pc || !data.payload) return;
+    if (!pc.remoteDescription) {
+      if (!pendingIceCandidates[uid]) pendingIceCandidates[uid] = [];
+      pendingIceCandidates[uid].push(new RTCIceCandidate(data.payload));
+      return;
+    }
     try { await pc.addIceCandidate(new RTCIceCandidate(data.payload)); } catch {}
   }
 
@@ -649,6 +663,7 @@ const Voice = (() => {
     if (!peers[uid]) return;
     peers[uid].pc.close();
     delete peers[uid];
+    delete pendingIceCandidates[uid];
     destroyAudioAnalyser(uid);
 
     // Clear stream ID tags on the tile so reconnection doesn't

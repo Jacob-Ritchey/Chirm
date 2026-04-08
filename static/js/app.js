@@ -160,6 +160,7 @@ async function init() {
       await loadMembers();
       await loadRoles();
       await loadVoiceRooms();
+      renderChannelList();
       await loadCustomEmojis();
       renderMembersList();
       _saveStructCache();
