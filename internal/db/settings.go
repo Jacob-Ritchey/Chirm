@@ -2,25 +2,25 @@ package db
 
 // --- Server Settings ---
 
-func (d *DB) IsSetupDone() bool {
+func (s *Store) IsSetupDone() bool {
 	var val string
-	err := d.QueryRow(`SELECT value FROM server_settings WHERE key = 'setup_done'`).Scan(&val)
+	err := s.server.QueryRow(`SELECT value FROM server_settings WHERE key = 'setup_done'`).Scan(&val)
 	return err == nil && val == "1"
 }
 
-func (d *DB) SetSetting(key, value string) error {
-	_, err := d.Exec(`INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, ?)`, key, value)
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.server.Exec(`INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, ?)`, key, value)
 	return err
 }
 
-func (d *DB) GetSetting(key string) (string, error) {
+func (s *Store) GetSetting(key string) (string, error) {
 	var val string
-	err := d.QueryRow(`SELECT value FROM server_settings WHERE key = ?`, key).Scan(&val)
+	err := s.server.QueryRow(`SELECT value FROM server_settings WHERE key = ?`, key).Scan(&val)
 	return val, err
 }
 
-func (d *DB) GetAllSettings() (map[string]string, error) {
-	rows, err := d.Query(`SELECT key, value FROM server_settings`)
+func (s *Store) GetAllSettings() (map[string]string, error) {
+	rows, err := s.server.Query(`SELECT key, value FROM server_settings`)
 	if err != nil {
 		return nil, err
 	}

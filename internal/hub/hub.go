@@ -3,9 +3,11 @@ package hub
 import (
 	"encoding/json"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/time/rate"
 )
 
 // WSEvent is the envelope for all WebSocket messages.
@@ -22,12 +24,14 @@ type RawClientMessage struct {
 
 // Client represents a single WebSocket connection.
 type Client struct {
-	Hub       *Hub
-	conn      *websocket.Conn
-	Send      chan []byte
-	UserID    string
-	channelID string
-	mu        sync.Mutex
+	Hub             *Hub
+	conn            *websocket.Conn
+	Send            chan []byte
+	UserID          string
+	channelID       string
+	threadChannelID string // secondary: subscribed thread channel
+	mu              sync.Mutex
+	limiter         *rate.Limiter // per-connection message rate limiter
 }
 
 // Hub manages all active WebSocket clients and voice room state.
@@ -62,12 +66,14 @@ func (h *Hub) AllowedOrigin() string {
 }
 
 // NewClient creates a new Client attached to this hub.
+// Each client is rate-limited to 10 messages/sec with a burst of 20.
 func (h *Hub) NewClient(conn *websocket.Conn, userID string) *Client {
 	return &Client{
-		Hub:    h,
-		conn:   conn,
-		Send:   make(chan []byte, 256),
-		UserID: userID,
+		Hub:     h,
+		conn:    conn,
+		Send:    make(chan []byte, 256),
+		UserID:  userID,
+		limiter: rate.NewLimiter(rate.Limit(10), 20),
 	}
 }
 
@@ -139,7 +145,7 @@ func (h *Hub) BroadcastToChannel(channelID string, event WSEvent) {
 	defer h.mu.RUnlock()
 	for client := range h.clients {
 		client.mu.Lock()
-		inChannel := client.channelID == channelID
+		inChannel := client.channelID == channelID || client.threadChannelID == channelID
 		client.mu.Unlock()
 		if inChannel {
 			select {
@@ -169,9 +175,18 @@ func (h *Hub) SendToUser(targetUserID string, event WSEvent) {
 }
 
 // SetChannel updates which channel this client is currently viewing.
+// Also clears any thread channel subscription to avoid stale subscriptions.
 func (c *Client) SetChannel(channelID string) {
 	c.mu.Lock()
 	c.channelID = channelID
+	c.threadChannelID = ""
+	c.mu.Unlock()
+}
+
+// SetThreadChannel sets a secondary channel subscription for a thread panel.
+func (c *Client) SetThreadChannel(channelID string) {
+	c.mu.Lock()
+	c.threadChannelID = channelID
 	c.mu.Unlock()
 }
 
@@ -199,6 +214,13 @@ func (c *Client) ReadPump(dispatch func(*Client, RawClientMessage)) {
 		}
 		var evt RawClientMessage
 		if err := json.Unmarshal(msg, &evt); err != nil {
+			continue
+		}
+		// Voice signaling messages (offer/answer/ICE/join/leave/media_state) fire in
+		// rapid bursts during WebRTC ICE negotiation and must not be rate-limited.
+		// They are already authenticated and bounded by AreInSameVoiceRoom checks.
+		if !strings.HasPrefix(evt.Type, "voice.") && !c.limiter.Allow() {
+			c.SendEvent(WSEvent{Type: "error", Data: map[string]string{"message": "rate limited"}})
 			continue
 		}
 		dispatch(c, evt)

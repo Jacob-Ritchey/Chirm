@@ -22,7 +22,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before, limit := parsePagination(r)
-	items, err := h.db.ListUsersPaginated(before, limit+1)
+	items, err := h.store.ListUsersPaginated(before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list users")
 		return
@@ -38,8 +38,13 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListMembers(w http.ResponseWriter, r *http.Request) {
+	u, err := h.currentUser(r)
+	if err != nil || u == nil || !h.store.HasPermission(u, db.PermReadMessages) {
+		errResp(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 	before, limit := parsePagination(r)
-	users, err := h.db.ListUsersPaginated(before, limit+1)
+	users, err := h.store.ListUsersPaginated(before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list members")
 		return
@@ -83,11 +88,11 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if err := h.db.UpdateUser(id, req.Username, req.Avatar); err != nil {
+	if err := h.store.UpdateUser(id, req.Username, req.Avatar); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
-	u, _ := h.db.GetUserByID(id)
+	u, _ := h.store.GetUserByID(id)
 	ok(w, u)
 }
 
@@ -101,7 +106,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, "cannot delete yourself")
 		return
 	}
-	target, err := h.db.GetUserByID(id)
+	target, err := h.store.GetUserByID(id)
 	if err != nil {
 		errResp(w, http.StatusNotFound, "user not found")
 		return
@@ -110,7 +115,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusForbidden, "cannot delete owner")
 		return
 	}
-	if err := h.db.DeleteUser(id); err != nil {
+	if err := h.store.DeleteUser(id); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to delete user")
 		return
 	}
@@ -121,8 +126,12 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 // --- Roles ---
 
 func (h *Handler) ListRoles(w http.ResponseWriter, r *http.Request) {
+	_, isAdmin := h.requireAdmin(w, r)
+	if !isAdmin {
+		return
+	}
 	before, limit := parsePagination(r)
-	items, err := h.db.ListRolesPaginated(before, limit+1)
+	items, err := h.store.ListRolesPaginated(before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list roles")
 		return
@@ -158,7 +167,7 @@ func (h *Handler) CreateRole(w http.ResponseWriter, r *http.Request) {
 	if req.Color == "" {
 		req.Color = "#99AAB5"
 	}
-	role, err := h.db.CreateRole(req.Name, req.Color, req.Permissions)
+	role, err := h.store.CreateRole(req.Name, req.Color, req.Permissions)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create role")
 		return
@@ -181,11 +190,11 @@ func (h *Handler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if err := h.db.UpdateRole(id, req.Name, req.Color, req.Permissions); err != nil {
+	if err := h.store.UpdateRole(id, req.Name, req.Color, req.Permissions); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to update role")
 		return
 	}
-	role, _ := h.db.GetRoleByID(id)
+	role, _ := h.store.GetRoleByID(id)
 	ok(w, role)
 }
 
@@ -195,7 +204,7 @@ func (h *Handler) DeleteRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
-	if err := h.db.DeleteRole(id); err != nil {
+	if err := h.store.DeleteRole(id); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to delete role")
 		return
 	}
@@ -209,7 +218,7 @@ func (h *Handler) AssignRole(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := chi.URLParam(r, "id")
 	roleID := chi.URLParam(r, "roleId")
-	if err := h.db.AssignRole(userID, roleID); err != nil {
+	if err := h.store.AssignRole(userID, roleID); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to assign role")
 		return
 	}
@@ -223,7 +232,7 @@ func (h *Handler) RemoveRole(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := chi.URLParam(r, "id")
 	roleID := chi.URLParam(r, "roleId")
-	if err := h.db.RemoveRole(userID, roleID); err != nil {
+	if err := h.store.RemoveRole(userID, roleID); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to remove role")
 		return
 	}
@@ -238,7 +247,7 @@ func (h *Handler) ListInvites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before, limit := parsePagination(r)
-	items, err := h.db.ListInvitesPaginated(before, limit+1)
+	items, err := h.store.ListInvitesPaginated(before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list invites")
 		return
@@ -264,12 +273,18 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	inv, err := h.db.CreateInvite(u.ID, req.MaxUses, nil)
+	inv, err := h.store.CreateInvite(u.ID, req.MaxUses, nil)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create invite")
 		return
 	}
-	created(w, inv)
+	created(w, map[string]interface{}{
+		"code":       inv.Code,
+		"uses":       inv.Uses,
+		"max_uses":   inv.MaxUses,
+		"expires_at": inv.ExpiresAt,
+		"created_at": inv.CreatedAt,
+	})
 }
 
 func (h *Handler) DeleteInvite(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +293,7 @@ func (h *Handler) DeleteInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := chi.URLParam(r, "code")
-	if err := h.db.DeleteInvite(code); err != nil {
+	if err := h.store.DeleteInvite(code); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to delete invite")
 		return
 	}
@@ -287,18 +302,18 @@ func (h *Handler) DeleteInvite(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) JoinWithInvite(w http.ResponseWriter, r *http.Request) {
 	code := chi.URLParam(r, "code")
-	inv, err := h.db.GetInviteByCode(code)
+	inv, err := h.store.GetInviteByCode(code)
 	if err != nil {
 		errResp(w, http.StatusNotFound, "invite not found")
 		return
 	}
 	// Fix #5: Check both use count and expiry via IsInviteValid.
-	if !h.db.IsInviteValid(inv) {
+	if !h.store.IsInviteValid(inv) {
 		errResp(w, http.StatusForbidden, "invite is no longer valid")
 		return
 	}
 	// Return invite info so frontend can show register form
-	serverName, _ := h.db.GetSetting("server_name")
+	serverName, _ := h.store.GetSetting("server_name")
 	ok(w, map[string]interface{}{
 		"valid":       true,
 		"code":        code,
@@ -320,7 +335,7 @@ func (h *Handler) GetPublicSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make(map[string]string)
 	for _, k := range publicKeys {
-		if v, err := h.db.GetSetting(k); err == nil {
+		if v, err := h.store.GetSetting(k); err == nil {
 			result[k] = v
 		}
 	}
@@ -333,7 +348,7 @@ func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	if !isAdmin {
 		return
 	}
-	settings, err := h.db.GetAllSettings()
+	settings, err := h.store.GetAllSettings()
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to get settings")
 		return
@@ -375,7 +390,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
-			h.db.SetSetting(k, v)
+			h.store.SetSetting(k, v)
 		}
 	}
 	ok(w, map[string]string{"message": "settings updated"})
@@ -431,7 +446,7 @@ func (h *Handler) UploadServerIcon(w http.ResponseWriter, r *http.Request) {
 	}
 
 	iconURL := "/uploads/" + filename
-	h.db.SetSetting("server_icon", iconURL)
+	h.store.SetSetting("server_icon", iconURL)
 	ok(w, map[string]string{"icon": iconURL})
 }
 
@@ -485,6 +500,6 @@ func (h *Handler) UploadLoginBg(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bgURL := "/uploads/" + filename
-	h.db.SetSetting("login_bg_image", bgURL)
+	h.store.SetSetting("login_bg_image", bgURL)
 	ok(w, map[string]string{"bg": bgURL})
 }

@@ -36,8 +36,8 @@ var globalVAPID = &VAPIDKeys{}
 // InitVAPID loads or generates VAPID keys, storing them via the DB settings.
 func (h *Handler) InitVAPID() error {
 	// Try to load existing keys from settings
-	privB64, _ := h.db.GetSetting("vapid_private_key")
-	pubB64, _  := h.db.GetSetting("vapid_public_key")
+	privB64, _ := h.store.GetSetting("vapid_private_key")
+	pubB64, _  := h.store.GetSetting("vapid_public_key")
 
 	if privB64 != "" && pubB64 != "" {
 		privBytes, err1 := base64.RawURLEncoding.DecodeString(privB64)
@@ -75,8 +75,8 @@ func (h *Handler) InitVAPID() error {
 	privB64Enc := base64.RawURLEncoding.EncodeToString(privBytes)
 	pubB64Enc  := base64.RawURLEncoding.EncodeToString(pubBytes)
 
-	_ = h.db.SetSetting("vapid_private_key", privB64Enc)
-	_ = h.db.SetSetting("vapid_public_key",  pubB64Enc)
+	_ = h.store.SetSetting("vapid_private_key", privB64Enc)
+	_ = h.store.SetSetting("vapid_public_key",  pubB64Enc)
 
 	globalVAPID.mu.Lock()
 	globalVAPID.privateKey = privKey
@@ -127,7 +127,7 @@ func (h *Handler) SavePushSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	raw, _ := json.Marshal(req)
-	if err := h.db.SavePushSubscription(u.ID, string(raw)); err != nil {
+	if err := h.store.SavePushSubscription(u.ID, string(raw)); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to save subscription")
 		return
 	}
@@ -148,7 +148,7 @@ func (h *Handler) RemovePushSubscription(w http.ResponseWriter, r *http.Request)
 		errResp(w, http.StatusBadRequest, "endpoint required")
 		return
 	}
-	_ = h.db.DeletePushSubscription(u.ID, req.Endpoint)
+	_ = h.store.DeletePushSubscription(u.ID, req.Endpoint)
 	ok(w, map[string]string{"status": "unsubscribed"})
 }
 
@@ -179,7 +179,7 @@ func (h *Handler) TestPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subs, err := h.db.GetAllPushSubscriptions()
+	subs, err := h.store.GetAllPushSubscriptions()
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "db error")
 		return
@@ -231,7 +231,7 @@ type PushPayload struct {
 // message author). This is called non-blocking from the MessageCreated event handler.
 func (h *Handler) BroadcastPush(authorUserID string, payload PushPayload) {
 	go func() {
-		subs, err := h.db.GetAllPushSubscriptions()
+		subs, err := h.store.GetAllPushSubscriptions()
 		if err != nil || len(subs) == 0 {
 			return
 		}

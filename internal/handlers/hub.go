@@ -3,12 +3,11 @@ package handlers
 import (
 	"encoding/json"
 
+	"chirm/internal/db"
 	"chirm/internal/hub"
 )
 
 // handleWSMessage dispatches incoming WebSocket messages from a client.
-// This is the transport layer: it decodes the message type and calls the
-// appropriate Hub method or sends responses back to the client.
 func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 	switch evt.Type {
 
@@ -16,9 +15,39 @@ func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 		var d struct {
 			ChannelID string `json:"channel_id"`
 		}
-		if json.Unmarshal(evt.Data, &d) == nil {
-			c.SetChannel(d.ChannelID)
+		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
+			return
 		}
+		u, err := h.store.GetUserByID(c.UserID)
+		if err != nil || u == nil || !h.store.HasPermission(u, db.PermReadMessages) {
+			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "unauthorized"}})
+			return
+		}
+		ch, err := h.store.GetChannelByID(d.ChannelID)
+		if err != nil || ch == nil {
+			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "channel not found"}})
+			return
+		}
+		c.SetChannel(d.ChannelID)
+
+	case "thread_subscribe":
+		var d struct {
+			ChannelID string `json:"channel_id"`
+		}
+		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
+			return
+		}
+		u, err := h.store.GetUserByID(c.UserID)
+		if err != nil || u == nil || !h.store.HasPermission(u, db.PermReadMessages) {
+			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "unauthorized"}})
+			return
+		}
+		ch, err := h.store.GetChannelByID(d.ChannelID)
+		if err != nil || ch == nil {
+			c.SendEvent(hub.WSEvent{Type: "error", Data: map[string]string{"message": "channel not found"}})
+			return
+		}
+		c.SetThreadChannel(d.ChannelID)
 
 	case "typing":
 		var d struct {
@@ -41,8 +70,7 @@ func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 		if json.Unmarshal(evt.Data, &d) != nil || d.ChannelID == "" {
 			return
 		}
-		// Verify the channel exists before admitting the client.
-		if ch, err := h.db.GetChannelByID(d.ChannelID); err != nil || ch == nil {
+		if ch, err := h.store.GetChannelByID(d.ChannelID); err != nil || ch == nil {
 			return
 		}
 		existing := h.hub.JoinVoiceRoom(d.ChannelID, c)
@@ -54,14 +82,6 @@ func (h *Handler) handleWSMessage(c *hub.Client, evt hub.RawClientMessage) {
 				"participants": existing,
 			},
 		})
-
-		h.hub.BroadcastToVoiceRoom(d.ChannelID, hub.WSEvent{
-			Type: "voice.joined",
-			Data: map[string]string{
-				"channel_id": d.ChannelID,
-				"user_id":    c.UserID,
-			},
-		}, c)
 
 		h.hub.Broadcast(hub.WSEvent{
 			Type: "voice.joined",

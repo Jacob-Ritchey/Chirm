@@ -50,7 +50,7 @@ export function renderMessages(channelId) {
 
 export function renderMessage(msg, continued = false) {
   const el = document.createElement('div');
-  el.className = `message-group${continued ? ' continued' : ' first-in-group'}`;
+  el.className = `message-group${continued ? ' continued' : ' first-in-group'}${msg.pending ? ' msg-pending' : ''}`;
   el.dataset.messageId = msg.id;
 
   const isBot = !!msg.bot;
@@ -75,13 +75,26 @@ export function renderMessage(msg, continued = false) {
   if (msg.attachments?.length) {
     attachmentsHtml = msg.attachments.map(att => {
       if (att.mime_type.startsWith('image/')) {
-        return `<div class="msg-attachment"><img src="/uploads/${escInline(att.filename)}" alt="${escInline(att.original_name)}" onclick="openImageViewer(this.src)" loading="lazy"></div>`;
+        return `<div class="msg-attachment"><img src="/api/v1/uploads/${escInline(att.filename)}" alt="${escInline(att.original_name)}" onclick="openImageViewer(this.src)" loading="lazy"></div>`;
       }
       if (att.mime_type.startsWith('video/')) {
-        return `<div class="msg-attachment"><video src="/uploads/${escInline(att.filename)}" controls preload="metadata" style="max-width:400px;max-height:300px;border-radius:var(--radius)"></video></div>`;
+        return `<div class="msg-attachment"><video src="/api/v1/uploads/${escInline(att.filename)}" controls preload="metadata" style="max-width:400px;max-height:300px;border-radius:var(--radius)"></video></div>`;
       }
-      return `<div class="msg-attachment"><a class="msg-file-attachment" href="/uploads/${escInline(att.filename)}" target="_blank" download="${escInline(att.original_name)}">📎 ${escInline(att.original_name)} <span class="text-muted text-sm">${formatSize(att.size)}</span></a></div>`;
+      return `<div class="msg-attachment"><a class="msg-file-attachment" href="/api/v1/uploads/${escInline(att.filename)}" target="_blank" download="${escInline(att.original_name)}">📎 ${escInline(att.original_name)} <span class="text-muted text-sm">${formatSize(att.size)}</span></a></div>`;
     }).join('');
+  }
+
+  // Thread chip — shown when this message spawned a thread
+  let threadChipHtml = '';
+  if (msg.thread) {
+    const t = msg.thread;
+    const count = t.message_count || 0;
+    threadChipHtml = `<div class="msg-thread-chip" data-thread-id="${escInline(t.id)}" onclick="openThreadById('${escInline(t.id)}')">
+      <span class="thread-chip-icon">🧵</span>
+      <span class="thread-chip-name">${escInline(t.name)}</span>
+      <span class="thread-chip-count">${count} ${count === 1 ? 'reply' : 'replies'}</span>
+      <span class="thread-chip-arrow">›</span>
+    </div>`;
   }
 
   // Reactions
@@ -91,9 +104,11 @@ export function renderMessage(msg, continued = false) {
   const msgIdSafe = msg.id;
   const authorNameEsc = authorName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   const contentPreview = (msg.content || '').slice(0, 80).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const canThread = !App.currentThread && App.currentChannel?.type !== 'voice' && App.currentChannel?.type !== 'forum' && App.currentChannel?.type !== 'gallery';
   const toolbar = `<div class="msg-toolbar">
     <button class="msg-toolbar-btn" title="React" onclick="openEmojiPicker(event, '${msgIdSafe}')">😊</button>
     <button class="msg-toolbar-btn" title="Reply" onclick="setReply('${msgIdSafe}', '${authorNameEsc}', '${contentPreview}')">↩</button>
+    ${canThread ? `<button class="msg-toolbar-btn" title="Start Thread" onclick="openStartThreadModal('${msgIdSafe}')">🧵</button>` : ''}
     ${canEdit ? `<button class="msg-toolbar-btn" title="Edit" onclick="editMessage('${msgIdSafe}')">✎</button>` : ''}
     ${canDelete ? `<button class="msg-toolbar-btn danger" title="Delete" onclick="deleteMessage('${msgIdSafe}')">🗑</button>` : ''}
   </div>`;
@@ -116,6 +131,7 @@ export function renderMessage(msg, continued = false) {
       </div>` : ''}
       <div class="msg-content">${renderContent(msg.content)}</div>
       ${attachmentsHtml}
+      ${threadChipHtml}
       ${reactionsHtml}
     </div>
   `;
@@ -236,16 +252,31 @@ export function renderReactions(msg) {
 }
 
 export function updateReactionsInDOM(messageId, reactions) {
+  // Update state for regular channel messages
   const channelId = App.currentChannel?.id;
   if (channelId && App.messages[channelId]) {
-    const msg = App.messages[channelId].find(m => m.id === messageId);
-    if (msg) msg.reactions = reactions;
+    const m = App.messages[channelId].find(m => m.id === messageId);
+    if (m) m.reactions = reactions;
   }
+  // Update state for thread messages
+  for (const arr of Object.values(App.threadMessages)) {
+    const m = arr.find(m => m.id === messageId);
+    if (m) { m.reactions = reactions; break; }
+  }
+
   const el = document.querySelector(`[data-message-id="${messageId}"]`);
   if (!el) return;
-  const msgs = App.messages[App.currentChannel?.id] || [];
-  const msg = msgs.find(m => m.id === messageId);
+
+  // Find message object from either source
+  let msg = (App.messages[App.currentChannel?.id] || []).find(m => m.id === messageId);
+  if (!msg) {
+    for (const arr of Object.values(App.threadMessages)) {
+      const found = arr.find(m => m.id === messageId);
+      if (found) { msg = found; break; }
+    }
+  }
   if (!msg) return;
+
   const existing = el.querySelector('.msg-reactions');
   const html = renderReactions(msg);
   if (existing) {
@@ -297,6 +328,7 @@ export async function loadMoreMessages(channelId) {
     return;
   }
   App.messages[channelId] = [...more, ...existing];
+  ChirmCache.set(channelId, App.messages[channelId]);
   renderMessages(channelId);
 }
 
@@ -314,16 +346,53 @@ export async function sendMessage() {
   const replyToId = App.replyTo?.id || null;
   clearReply();
 
+  const channelId = App.currentChannel.id;
+  if (!App.messages[channelId]) App.messages[channelId] = [];
+
+  const tempId = 'pending_' + Date.now();
+  const prev = App.messages[channelId].at(-1);
+  const tempMsg = {
+    id: tempId,
+    channel_id: channelId,
+    user_id: App.user?.id,
+    content,
+    author: App.user ? { username: App.user.username, avatar: App.user.avatar, color: App.user.color } : {},
+    created_at: new Date().toISOString(),
+    pending: true,
+  };
+  App.messages[channelId].push(tempMsg);
+  const list = document.getElementById('messages-list');
+  if (list) {
+    const prevTs = prev ? new Date(prev.created_at).getTime() : 0;
+    const continued = !!prev && prev.user_id === tempMsg.user_id && Date.now() - prevTs < 5 * 60 * 1000;
+    list.appendChild(renderMessage(tempMsg, continued));
+    if (isNearBottom()) scrollToBottom();
+  }
+
   try {
     const body = { content, reply_to_id: replyToId };
     if (App.pendingUpload) {
       body.attachments = [App.pendingUpload.id];
       clearUploadPreview();
     }
-    await api.post(`/api/v1/channels/${App.currentChannel.id}/messages`, body);
+    const msg = await api.post(`/api/v1/channels/${channelId}/messages`, body);
+    if (msg?.id) {
+      const tempIdx = App.messages[channelId].findIndex(m => m.id === tempId);
+      if (tempIdx >= 0) {
+        App.messages[channelId][tempIdx] = msg;
+        if (typeof ChirmCache !== 'undefined') ChirmCache.appendMessage(channelId, msg);
+        const domEl = document.querySelector(`[data-message-id="${tempId}"]`);
+        if (domEl) domEl.replaceWith(renderMessage(msg, domEl.classList.contains('continued')));
+      }
+      // If tempIdx === -1, the WS echo already resolved the pending message
+    }
   } catch (e) {
     toast(e.message, 'error');
     input.value = content;
+    const tempIdx = App.messages[channelId].findIndex(m => m.id === tempId);
+    if (tempIdx >= 0) App.messages[channelId].splice(tempIdx, 1);
+    const domEl = document.querySelector(`[data-message-id="${tempId}"]`);
+    if (domEl) domEl.remove();
   }
 }
 
@@ -345,9 +414,27 @@ export function clearReply() {
 // ─── REACTIONS ────────────────────────────────────────────────────────────────
 
 export async function toggleReaction(messageId, emoji) {
-  const msg = (App.messages[App.currentChannel?.id] || []).find(m => m.id === messageId);
-  const reaction = msg?.reactions?.find(r => r.emoji === emoji);
-  const alreadyReacted = reaction?.user_ids?.includes(App.user?.id);
+  const channelId = App.currentChannel?.id;
+  const msg = (App.messages[channelId] || []).find(m => m.id === messageId);
+  const originalReactions = msg ? JSON.parse(JSON.stringify(msg.reactions || [])) : null;
+  const alreadyReacted = originalReactions?.find(r => r.emoji === emoji)?.user_ids?.includes(App.user?.id);
+
+  if (msg) {
+    const reactions = JSON.parse(JSON.stringify(msg.reactions || []));
+    const existing = reactions.find(r => r.emoji === emoji);
+    if (alreadyReacted) {
+      existing.user_ids = existing.user_ids.filter(id => id !== App.user.id);
+      existing.count = Math.max(0, existing.count - 1);
+      if (existing.count === 0) reactions.splice(reactions.indexOf(existing), 1);
+    } else if (existing) {
+      existing.user_ids = [...existing.user_ids, App.user.id];
+      existing.count++;
+    } else {
+      reactions.push({ emoji, count: 1, user_ids: [App.user.id] });
+    }
+    msg.reactions = reactions;
+    updateReactionsInDOM(messageId, reactions);
+  }
 
   try {
     if (alreadyReacted) {
@@ -359,6 +446,10 @@ export async function toggleReaction(messageId, emoji) {
       await api.post(`/api/v1/messages/${messageId}/reactions`, { emoji });
     }
   } catch (e) {
+    if (msg && originalReactions !== null) {
+      msg.reactions = originalReactions;
+      updateReactionsInDOM(messageId, originalReactions);
+    }
     toast(e.message, 'error');
   }
 }
@@ -415,7 +506,7 @@ export function buildEmojiPicker(mode, targetMsgId, callback) {
     if (cat.custom) {
       panel.innerHTML = customEmojis.map(e =>
         `<button class="emoji-btn emoji-btn-custom" onclick="event.stopPropagation(); selectEmoji(':${e.name}:');" title=":${e.name}:">
-          <img src="/uploads/${e.filename}" alt="${e.name}">
+          <img src="/api/v1/uploads/${e.filename}" alt="${e.name}">
           <span>${e.name}</span>
         </button>`
       ).join('');
@@ -500,7 +591,7 @@ export function filterEmojis(query) {
   (App.customEmojis || []).forEach(e => {
     if (e.name.includes(q)) {
       hits.push(`<button class="emoji-btn emoji-btn-custom" onclick="event.stopPropagation(); selectEmoji(':${e.name}:');" title=":${e.name}:">
-        <img src="/uploads/${e.filename}" alt="${e.name}"><span>${e.name}</span></button>`);
+        <img src="/api/v1/uploads/${e.filename}" alt="${e.name}"><span>${e.name}</span></button>`);
     }
   });
 

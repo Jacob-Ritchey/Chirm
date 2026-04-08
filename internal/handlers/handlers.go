@@ -15,16 +15,17 @@ import (
 )
 
 type Handler struct {
-	db            *db.DB
+	store         *db.Store
 	auth          *auth.Service
 	hub           *hub.Hub
 	bus           *events.Bus
 	dataDir       string
 	allowedOrigin string
+	encKey        *[32]byte // nil when CHIRM_ENCRYPTION_KEY is not set
 }
 
-func New(database *db.DB, authSvc *auth.Service, h *hub.Hub, bus *events.Bus, dataDir, allowedOrigin string) *Handler {
-	return &Handler{db: database, auth: authSvc, hub: h, bus: bus, dataDir: dataDir, allowedOrigin: allowedOrigin}
+func New(store *db.Store, authSvc *auth.Service, h *hub.Hub, bus *events.Bus, dataDir, allowedOrigin string, encKey *[32]byte) *Handler {
+	return &Handler{store: store, auth: authSvc, hub: h, bus: bus, dataDir: dataDir, allowedOrigin: allowedOrigin, encKey: encKey}
 }
 
 // makeUpgrader builds a WebSocket upgrader that validates the Origin header.
@@ -108,7 +109,7 @@ func (h *Handler) currentUser(r *http.Request) (*db.User, error) {
 	if claims == nil {
 		return nil, nil
 	}
-	return h.db.GetUserByID(claims.UserID)
+	return h.store.GetUserByID(claims.UserID)
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (*db.User, bool) {
@@ -117,7 +118,7 @@ func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (*db.User
 		errResp(w, http.StatusUnauthorized, "unauthorized")
 		return nil, false
 	}
-	if !u.IsOwner && !h.db.HasPermission(u, db.PermAdministrator) {
+	if !u.IsOwner && !h.store.HasPermission(u, db.PermAdministrator) {
 		errResp(w, http.StatusForbidden, "insufficient permissions")
 		return nil, false
 	}
@@ -133,6 +134,21 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	csrfToken := r.URL.Query().Get("csrf")
+	if csrfToken == "" {
+		http.Error(w, "missing csrf token", http.StatusForbidden)
+		return
+	}
+	ownerID, err := h.store.ConsumeCSRFToken(csrfToken)
+	if err != nil {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if ownerID == "" || ownerID != claims.UserID {
+		http.Error(w, "invalid or expired csrf token", http.StatusForbidden)
+		return
+	}
+
 	upgrader := makeUpgrader(h.allowedOrigin)
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -144,6 +160,21 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 
 	go client.WritePump()
 	go client.ReadPump(h.handleWSMessage)
+}
+
+// IssueCSRFToken issues a short-lived single-use CSRF token for the current user.
+func (h *Handler) IssueCSRFToken(w http.ResponseWriter, r *http.Request) {
+	claims := mw.GetClaims(r)
+	if claims == nil {
+		errResp(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	token, err := h.store.IssueCSRFToken(claims.UserID)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to issue token")
+		return
+	}
+	ok(w, map[string]string{"token": token})
 }
 
 // VoiceRooms returns a snapshot of who is currently in each voice room.

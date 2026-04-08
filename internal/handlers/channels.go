@@ -14,7 +14,7 @@ import (
 
 func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	before, limit := parsePagination(r)
-	items, err := h.db.ListChannelsPaginated(before, limit+1)
+	items, err := h.store.ListChannelsPaginated(before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list channels")
 		return
@@ -56,7 +56,7 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		req.Type = "text"
 	}
 
-	channel, err := h.db.CreateChannel(req.Name, req.Description, req.Type, req.Emoji, req.CategoryID)
+	channel, err := h.store.CreateChannel(req.Name, req.Description, req.Type, req.Emoji, req.CategoryID)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create channel")
 		return
@@ -84,12 +84,12 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.UpdateChannel(id, req.Name, req.Description, req.Emoji, req.CategoryID); err != nil {
+	if err := h.store.UpdateChannel(id, req.Name, req.Description, req.Emoji, req.CategoryID); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to update channel")
 		return
 	}
 
-	channel, _ := h.db.GetChannelByID(id)
+	channel, _ := h.store.GetChannelByID(id)
 	h.hub.Broadcast(hub.WSEvent{Type: "channel.update", Data: channel})
 	ok(w, channel)
 }
@@ -101,7 +101,7 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := chi.URLParam(r, "id")
-	if err := h.db.DeleteChannel(id); err != nil {
+	if err := h.store.DeleteChannel(id); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to delete channel")
 		return
 	}
@@ -140,12 +140,12 @@ func (h *Handler) ReorderChannels(w http.ResponseWriter, r *http.Request) {
 		}{r.ID, r.Position, r.CategoryID}
 	}
 
-	if err := h.db.ReorderChannels(orders); err != nil {
+	if err := h.store.ReorderChannels(orders); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to reorder channels")
 		return
 	}
 
-	channels, _ := h.db.ListChannels()
+	channels, _ := h.store.ListChannels()
 	h.hub.Broadcast(hub.WSEvent{Type: "channels.reorder", Data: channels})
 	ok(w, map[string]string{"message": "reordered"})
 }
@@ -153,7 +153,7 @@ func (h *Handler) ReorderChannels(w http.ResponseWriter, r *http.Request) {
 // ─── Channel Categories ────────────────────────────────────────────────────────
 
 func (h *Handler) ListCategories(w http.ResponseWriter, r *http.Request) {
-	cats, err := h.db.ListCategories()
+	cats, err := h.store.ListCategories()
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to list categories")
 		return
@@ -180,7 +180,7 @@ func (h *Handler) CreateCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cat, err := h.db.CreateCategory(req.Name)
+	cat, err := h.store.CreateCategory(req.Name)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create category")
 		return
@@ -205,12 +205,12 @@ func (h *Handler) UpdateCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.UpdateCategory(id, req.Name); err != nil {
+	if err := h.store.UpdateCategory(id, req.Name); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to update category")
 		return
 	}
 
-	cats, _ := h.db.ListCategories()
+	cats, _ := h.store.ListCategories()
 	h.hub.Broadcast(hub.WSEvent{Type: "categories.update", Data: cats})
 	ok(w, map[string]string{"message": "updated"})
 }
@@ -235,12 +235,12 @@ func (h *Handler) ReorderCategories(w http.ResponseWriter, r *http.Request) {
 		mapped[i].ID = o.ID
 		mapped[i].Position = o.Position
 	}
-	if err := h.db.ReorderCategories(mapped); err != nil {
+	if err := h.store.ReorderCategories(mapped); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to reorder categories")
 		return
 	}
 
-	cats, _ := h.db.ListCategories()
+	cats, _ := h.store.ListCategories()
 	h.hub.Broadcast(hub.WSEvent{Type: "categories.update", Data: cats})
 	ok(w, map[string]string{"message": "reordered"})
 }
@@ -252,12 +252,12 @@ func (h *Handler) DeleteCategory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := chi.URLParam(r, "id")
-	if err := h.db.DeleteCategory(id); err != nil {
+	if err := h.store.DeleteCategory(id); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to delete category")
 		return
 	}
 
-	channels, _ := h.db.ListChannels()
+	channels, _ := h.store.ListChannels()
 	h.hub.Broadcast(hub.WSEvent{Type: "category.delete", Data: map[string]interface{}{"id": id, "channels": channels}})
 	ok(w, map[string]string{"message": "deleted"})
 }

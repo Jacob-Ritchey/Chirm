@@ -6,7 +6,7 @@ import { avatar, esc, stringToColor } from '../utils.js';
 
 export async function loadMembers() {
   const page = await api.get('/api/v1/members').catch(() => null);
-  App.members = page ? (page.items ?? page) : [];
+  if (page) App.members = page.items ?? page;
 }
 
 export function renderUserPanel() {

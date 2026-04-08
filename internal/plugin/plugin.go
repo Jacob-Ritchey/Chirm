@@ -49,4 +49,4 @@ type Plugin interface {
 // Compile-time interface satisfaction assertions.
 // These will fail to compile if hub.Hub or db.DB drift away from the plugin interfaces.
 var _ PluginHub = (*hub.Hub)(nil)
-var _ PluginDB = (*db.DB)(nil)
+var _ PluginDB = (*db.Store)(nil)

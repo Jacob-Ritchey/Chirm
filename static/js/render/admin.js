@@ -607,7 +607,7 @@ export async function renderAdminEmojis() {
       <thead><tr><th>Image</th><th>Name</th><th>Uploaded By</th><th>Actions</th></tr></thead>
       <tbody>${emojis.map(e => `
         <tr>
-          <td><img src="/uploads/${esc(e.filename)}" style="width:32px;height:32px;object-fit:contain;border-radius:4px"></td>
+          <td><img src="/api/v1/uploads/${esc(e.filename)}" style="width:32px;height:32px;object-fit:contain;border-radius:4px"></td>
           <td><code style="font-family:'Space Mono',monospace;font-size:13px">:${esc(e.name)}:</code></td>
           <td>${esc(e.uploader?.username || 'Unknown')}</td>
           <td><button class="btn btn-sm btn-danger" onclick="adminDeleteEmoji('${e.id}','${esc(e.name)}')">Delete</button></td>

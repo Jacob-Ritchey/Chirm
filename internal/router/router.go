@@ -17,9 +17,9 @@ import (
 // Register mounts the WebSocket endpoint and all REST API routes under /api/v1/.
 // A 308 redirect from the legacy /api/* prefix is also installed so existing
 // clients continue to work during the migration period.
-func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database *db.DB, authLimiter func(http.Handler) http.Handler, bus *events.Bus, wsHub *hub.Hub, plugins []plugin.Plugin) {
+func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, store *db.Store, authLimiter func(http.Handler) http.Handler, bus *events.Bus, wsHub *hub.Hub, plugins []plugin.Plugin) {
 	// WebSocket — not versioned, lives outside /api/v1/.
-	r.With(mw.Auth(authSvc, database)).Get("/ws", h.WebSocket)
+	r.With(mw.Auth(authSvc, store)).Get("/ws", h.WebSocket)
 
 	// Legacy redirect: /api/<path> → /api/v1/<path> (308 preserves HTTP method).
 	r.HandleFunc("/api/*", func(w http.ResponseWriter, r *http.Request) {
@@ -30,21 +30,32 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 		http.Redirect(w, r, newPath, http.StatusPermanentRedirect)
 	})
 
+	// Public file serving for server-wide assets (server icon, login background).
+	// User content (avatars, attachments, emojis) stays behind /api/v1/uploads/ with auth.
+	r.Get("/uploads/{filename}", h.ServePublicUpload)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// ── Public endpoints ──────────────────────────────────────────────
 		r.Get("/setup/status", h.SetupStatus)
 		r.Post("/setup", h.Setup)
 		r.With(authLimiter).Post("/auth/login", h.Login)
 		r.With(authLimiter).Post("/auth/register", h.Register)
+		r.Post("/auth/refresh", h.RefreshToken)
+		r.With(authLimiter).Post("/auth/totp", h.VerifyTOTP)
 		r.Post("/auth/logout", h.Logout)
 		r.Get("/join/{code}", h.JoinWithInvite)
 		r.Get("/public-settings", h.GetPublicSettings)
 
 		// ── Authenticated endpoints ───────────────────────────────────────
 		r.Group(func(r chi.Router) {
-			r.Use(mw.Auth(authSvc, database))
+			r.Use(mw.Auth(authSvc, store))
+
+			r.Get("/auth/csrf", h.IssueCSRFToken)
 
 			r.Get("/me", h.GetMe)
+			r.Post("/me/totp/setup", h.SetupTOTP)
+			r.Post("/me/totp/confirm", h.ConfirmTOTP)
+			r.Delete("/me/totp", h.DisableTOTP)
 			r.Put("/me", h.UpdateMe)
 			r.Post("/me/avatar", h.UploadAvatar)
 			r.Post("/me/banner", h.UploadBanner)
@@ -69,6 +80,13 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 			r.Post("/messages/{id}/reactions", h.AddReaction)
 			r.Delete("/messages/{id}/reactions", h.RemoveReaction)
 
+			r.Get("/channels/{id}/threads", h.ListThreads)
+			r.Post("/channels/{id}/threads", h.CreateThread)
+			r.Delete("/threads/{id}", h.DeleteThread)
+			r.Get("/threads/{id}/first-message", h.GetThreadFirstMessage)
+			r.Get("/threads/{id}/messages", h.GetThreadMessages)
+			r.Post("/threads/{id}/messages", h.SendThreadMessage)
+
 			r.Get("/emojis", h.ListCustomEmojis)
 			r.Post("/emojis", h.UploadCustomEmoji)
 			r.Delete("/emojis/{id}", h.DeleteCustomEmoji)
@@ -76,6 +94,7 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 			r.Get("/link-preview", h.LinkPreview)
 
 			r.Post("/upload", h.Upload)
+			r.Get("/uploads/{filename}", h.ServeUpload)
 
 			r.Get("/users", h.ListUsers)
 			r.Get("/users/{id}", h.GetUserProfile)
@@ -108,6 +127,10 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 			r.Get("/push/poll", h.PollUnread)
 			r.Post("/push/test", h.TestPush)
 
+			// ── Admin utilities ──────────────────────────────────────────
+			r.Delete("/admin/lockout/{identifier}", h.AdminUnlockAccount)
+			r.Post("/admin/wipe", h.AdminWipe)
+
 			// ── Bot management (admin-only) ───────────────────────────────
 			r.Get("/bots", h.ListBots)
 			r.Post("/bots", h.CreateBot)
@@ -122,7 +145,7 @@ func Register(r chi.Router, h *handlers.Handler, authSvc *auth.Service, database
 					ctx := plugin.PluginContext{
 						Bus:    bus,
 						Hub:    wsHub,
-						DB:     database,
+						DB:     store,
 						Router: sub,
 					}
 					if err := p.Init(ctx); err != nil {

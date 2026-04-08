@@ -7,11 +7,11 @@ import (
 )
 
 func (h *Handler) SetupStatus(w http.ResponseWriter, r *http.Request) {
-	ok(w, map[string]bool{"setup_done": h.db.IsSetupDone()})
+	ok(w, map[string]bool{"setup_done": h.store.IsSetupDone()})
 }
 
 func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
-	if h.db.IsSetupDone() {
+	if h.store.IsSetupDone() {
 		errResp(w, http.StatusForbidden, "setup already complete")
 		return
 	}
@@ -51,40 +51,40 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create owner account
-	user, err := h.db.CreateUser(req.Username, req.Email, hash, true)
+	user, err := h.store.CreateUser(req.Username, req.Email, hash, true)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create user: "+err.Error())
 		return
 	}
 
 	// Create default @everyone role
-	_, err = h.db.CreateRole("@everyone", "#99AAB5", 3) // READ | SEND
+	_, err = h.store.CreateRole("@everyone", "#99AAB5", 3) // READ | SEND
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create default role")
 		return
 	}
 
 	// Create default channel
-	_, err = h.db.CreateChannel("general", "General discussion", "text", "", "")
+	_, err = h.store.CreateChannel("general", "General discussion", "text", "", "")
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to create channel")
 		return
 	}
 
 	// Save settings
-	h.db.SetSetting("setup_done", "1")
-	h.db.SetSetting("server_name", req.ServerName)
-	h.db.SetSetting("allow_registration", "1")
-	h.db.SetSetting("require_invite", "0")
+	h.store.SetSetting("setup_done", "1")
+	h.store.SetSetting("server_name", req.ServerName)
+	h.store.SetSetting("allow_registration", "1")
+	h.store.SetSetting("require_invite", "0")
 	if req.ServerDescription != "" {
-		h.db.SetSetting("server_description", req.ServerDescription)
+		h.store.SetSetting("server_description", req.ServerDescription)
 	}
 	if req.LoginBgColor != "" {
-		h.db.SetSetting("login_bg_color", req.LoginBgColor)
+		h.store.SetSetting("login_bg_color", req.LoginBgColor)
 	}
 	if req.AgreementEnabled == "1" && req.AgreementText != "" {
-		h.db.SetSetting("agreement_enabled", "1")
-		h.db.SetSetting("agreement_text", req.AgreementText)
+		h.store.SetSetting("agreement_enabled", "1")
+		h.store.SetSetting("agreement_text", req.AgreementText)
 	}
 
 	// Issue token
@@ -103,10 +103,24 @@ func setTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
 	// Secure: true caused Chrome to silently reject the cookie over plain
 	// HTTP, making login appear completely broken on :8080.
 	isSecure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	// Access token cookie — short-lived (15 min), matching the JWT expiry.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "chirm_token",
 		Value:    token,
 		Path:     "/",
+		MaxAge:   15 * 60,
+		HttpOnly: true,
+		Secure:   isSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string) {
+	isSecure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	http.SetCookie(w, &http.Cookie{
+		Name:     "chirm_refresh",
+		Value:    token,
+		Path:     "/api/v1/auth/refresh",
 		MaxAge:   30 * 24 * 3600,
 		HttpOnly: true,
 		Secure:   isSecure,

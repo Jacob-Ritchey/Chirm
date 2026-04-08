@@ -29,14 +29,25 @@ import (
 
 	"chirm/internal/auth"
 	"chirm/internal/config"
+	"chirm/internal/crypto"
 	"chirm/internal/db"
 	"chirm/internal/events"
 	"chirm/internal/handlers"
 	"chirm/internal/hub"
+	chirmlogger "chirm/internal/logger"
 	mw "chirm/internal/middleware"
 	"chirm/internal/plugin"
 	"chirm/internal/router"
 )
+
+// internEncryptFile / internDecryptFile are thin shims so main.go can call
+// the crypto package without duplicating logic.
+func internEncryptFile(key *[32]byte, data []byte) ([]byte, error) {
+	return crypto.EncryptFile(key, data)
+}
+func internDecryptFile(key *[32]byte, data []byte) ([]byte, error) {
+	return crypto.DecryptFile(key, data)
+}
 
 //go:embed static
 var staticFiles embed.FS
@@ -47,15 +58,29 @@ func main() {
 		log.Fatal("FATAL: ", err)
 	}
 
+	// --migrate-uploads: encrypt all existing plaintext uploads then exit.
+	for _, arg := range os.Args[1:] {
+		if arg == "--migrate-uploads" {
+			if cfg.EncryptionKey == nil {
+				log.Fatal("--migrate-uploads requires CHIRM_ENCRYPTION_KEY to be set")
+			}
+			if err := migrateUploads(cfg.DataDir, cfg.EncryptionKey); err != nil {
+				log.Fatal("Migration failed:", err)
+			}
+			fmt.Println("Upload migration complete.")
+			return
+		}
+	}
+
 	if err := os.MkdirAll(cfg.DataDir+"/uploads", 0755); err != nil {
 		log.Fatal("Failed to create data directory:", err)
 	}
 
-	database, err := db.Init(cfg.DataDir + "/chirm.db")
+	store, err := db.New(cfg.DataDir, cfg.EncryptionKey)
 	if err != nil {
 		log.Fatal("Failed to init database:", err)
 	}
-	defer database.Close()
+	defer store.Close()
 
 	authSvc := auth.New(cfg.JWTSecret)
 	wsHub := hub.New(cfg.AllowedOrigin)
@@ -63,18 +88,38 @@ func main() {
 
 	bus := events.New()
 
+	// Initialise audit logging if a path is configured.
+	if cfg.AuditLogPath != "" {
+		if err := chirmlogger.InitAudit(cfg.AuditLogPath); err != nil {
+			log.Printf("⚠ audit log init error: %v", err)
+		} else {
+			log.Printf("audit log → %s (retention: %d days)", cfg.AuditLogPath, cfg.LogRetentionDays)
+		}
+		// Prune old audit logs daily.
+		go func() {
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			dir := cfg.DataDir + "/logs"
+			for range ticker.C {
+				chirmlogger.PruneAuditLogs(dir, cfg.LogRetentionDays)
+			}
+		}()
+	}
+
 	// Fix #9: Periodically clean up orphaned attachments (uploaded but never sent).
+	// Also reconcile per-user storage counters to keep quota enforcement accurate.
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
-			if err := database.CleanOrphanedAttachments(cfg.DataDir+"/uploads", 1*time.Hour); err != nil {
+			if err := store.CleanOrphanedAttachments(cfg.DataDir+"/uploads", 1*time.Hour); err != nil {
 				log.Printf("attachment cleanup error: %v", err)
 			}
+			store.ReconcileAllStorageUsed()
 		}
 	}()
 
-	h := handlers.New(database, authSvc, wsHub, bus, cfg.DataDir, cfg.AllowedOrigin)
+	h := handlers.New(store, authSvc, wsHub, bus, cfg.DataDir, cfg.AllowedOrigin, cfg.EncryptionKey)
 
 	// Initialise VAPID keys for Web Push notifications (non-fatal if it fails)
 	if err := h.InitVAPID(); err != nil {
@@ -167,8 +212,35 @@ func main() {
 			"avatar":   d.Avatar,
 		}})
 	})
+	bus.Subscribe(events.ThreadCreated, func(e events.Event) {
+		d := e.Data.(events.ThreadCreatedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "thread.new", Data: map[string]interface{}{
+			"thread":     d.Thread,
+			"channel_id": d.ChannelID,
+		}})
+	})
+	bus.Subscribe(events.ThreadDeleted, func(e events.Event) {
+		d := e.Data.(events.ThreadDeletedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "thread.delete", Data: map[string]string{
+			"thread_id":  d.ThreadID,
+			"channel_id": d.ChannelID,
+		}})
+	})
+	bus.Subscribe(events.ThreadMessageCreated, func(e events.Event) {
+		d := e.Data.(events.ThreadMessageCreatedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "thread.message.new", Data: d.Message})
+	})
+	bus.Subscribe(events.ThreadMessageDeleted, func(e events.Event) {
+		d := e.Data.(events.ThreadMessageDeletedData)
+		wsHub.BroadcastToChannel(d.ChannelID, hub.WSEvent{Type: "thread.message.delete", Data: map[string]string{
+			"id":         d.MessageID,
+			"thread_id":  d.ThreadID,
+			"channel_id": d.ChannelID,
+		}})
+	})
 
 	r := chi.NewRouter()
+	r.Use(mw.SecurityHeaders)
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.CleanPath)
@@ -177,10 +249,7 @@ func main() {
 	authLimiter := mw.NewIPRateLimiter(rate.Every(time.Minute/10), 5)
 
 	// All API routes and WebSocket are registered by the router package.
-	router.Register(r, h, authSvc, database, authLimiter, bus, wsHub, pluginList)
-
-	// Uploaded files
-	r.Get("/uploads/{filename}", h.ServeUpload)
+	router.Register(r, h, authSvc, store, authLimiter, bus, wsHub, pluginList)
 
 	// CA cert download — served over plain HTTP so devices can fetch and install
 	// it before they trust the server's TLS certificate.
@@ -317,7 +386,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		httpServer.Shutdown(ctx)
-		database.Close()
+		store.Close()
 		os.Exit(0)
 	}()
 
@@ -582,4 +651,82 @@ func getLANIP() string {
 		}
 	}
 	return "localhost"
+}
+
+// migrateUploads encrypts all plaintext files in {dataDir}/uploads/ that are
+// user content (skips server_icon_*, login_bg_*, emoji_* which are public assets).
+// Files that are already encrypted are skipped. The operation is idempotent.
+func migrateUploads(dataDir string, encKey *[32]byte) error {
+	uploadsDir := filepath.Join(dataDir, "uploads")
+	entries, err := os.ReadDir(uploadsDir)
+	if err != nil {
+		return err
+	}
+
+	skippedPrefixes := []string{"server_icon_", "login_bg_", "emoji_"}
+	skipped, encrypted, failed := 0, 0, 0
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+
+		// Skip public assets.
+		isPublic := false
+		for _, pfx := range skippedPrefixes {
+			if len(name) >= len(pfx) && name[:len(pfx)] == pfx {
+				isPublic = true
+				break
+			}
+		}
+		if isPublic {
+			skipped++
+			continue
+		}
+
+		path := filepath.Join(uploadsDir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  skip %s: read error: %v\n", name, err)
+			failed++
+			continue
+		}
+
+		// Attempt decryption; if it succeeds the file is already encrypted.
+		if _, err := internDecryptFile(encKey, data); err == nil {
+			skipped++
+			continue
+		}
+
+		// File is plaintext — encrypt it.
+		blob, err := internEncryptFile(encKey, data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  skip %s: encrypt error: %v\n", name, err)
+			failed++
+			continue
+		}
+
+		// Write to a temp file then rename to avoid partial writes.
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, blob, 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "  skip %s: write error: %v\n", name, err)
+			failed++
+			continue
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			os.Remove(tmp)
+			fmt.Fprintf(os.Stderr, "  skip %s: rename error: %v\n", name, err)
+			failed++
+			continue
+		}
+		fmt.Printf("  encrypted %s\n", name)
+		encrypted++
+	}
+
+	fmt.Printf("Migration summary: %d encrypted, %d skipped, %d failed\n", encrypted, skipped, failed)
+	if failed > 0 {
+		return fmt.Errorf("%d files failed to encrypt", failed)
+	}
+	return nil
 }

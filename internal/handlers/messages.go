@@ -21,12 +21,12 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
 		limit = l
 	}
 
-	if _, err := h.db.GetChannelByID(channelID); err != nil {
-		errResp(w, http.StatusNotFound, "channel not found")
+	if _, err := h.store.GetChannelByID(channelID); err != nil {
+		errResp(w, http.StatusForbidden, "channel not found")
 		return
 	}
 
-	msgs, err := h.db.GetMessages(channelID, before, limit+1)
+	msgs, err := h.store.GetMessages(channelID, before, limit+1)
 	if err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to get messages")
 		return
@@ -42,7 +42,6 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
-	// Determine identity: user or bot
 	u, _ := h.currentUser(r)
 	botClaims := mw.GetBotClaims(r)
 
@@ -51,8 +50,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check PermSendMessages
-	if u != nil && !h.db.HasPermission(u, db.PermSendMessages) {
+	if u != nil && !h.store.HasPermission(u, db.PermSendMessages) {
 		errResp(w, http.StatusForbidden, "no permission to send messages")
 		return
 	}
@@ -62,8 +60,8 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channelID := chi.URLParam(r, "id")
-	if _, err := h.db.GetChannelByID(channelID); err != nil {
-		errResp(w, http.StatusNotFound, "channel not found")
+	if _, err := h.store.GetChannelByID(channelID); err != nil {
+		errResp(w, http.StatusForbidden, "channel not found")
 		return
 	}
 
@@ -92,15 +90,16 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	var authorID, authorName string
 
 	if u != nil {
-		msg, err = h.db.CreateMessage(channelID, u.ID, req.Content, req.ReplyToID)
+		msg, err = h.store.CreateMessage(channelID, u.ID, req.Content, req.ReplyToID)
 		authorID = u.ID
-		if msg != nil && msg.Author != nil {
-			authorName = msg.Author.Username
-		} else {
+		if msg != nil {
+			authorName = msg.AuthorUsername
+		}
+		if authorName == "" {
 			authorName = "Someone"
 		}
 	} else {
-		msg, err = h.db.CreateMessageFromBot(channelID, botClaims.BotID, req.Content, req.ReplyToID)
+		msg, err = h.store.CreateMessageFromBot(channelID, botClaims.BotID, req.Content, req.ReplyToID)
 		authorID = "bot:" + botClaims.BotID
 		authorName = botClaims.BotName
 	}
@@ -111,16 +110,16 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 
 	for _, attID := range req.Attachments {
 		if attID != "" {
-			h.db.LinkAttachment(attID, msg.ID)
+			h.store.LinkAttachment(attID, msg.ID, channelID)
 		}
 	}
 	if len(req.Attachments) > 0 {
-		if full, err := h.db.GetMessageByID(msg.ID); err == nil {
+		if full, err := h.store.GetMessageByID(msg.ID); err == nil {
 			msg = full
 		}
 	}
 
-	chObj, _ := h.db.GetChannelByID(channelID)
+	chObj, _ := h.store.GetChannelByID(channelID)
 	chName := channelID
 	if chObj != nil {
 		chName = chObj.Name
@@ -142,6 +141,26 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 
+	// If this message was sent to a thread channel, update thread counters
+	// and notify the parent channel so forum/gallery reply counts stay current.
+	if chObj != nil && chObj.Type == "thread" {
+		thread, err := h.store.GetThreadByChannelID(channelID)
+		if err == nil && thread != nil {
+			h.store.IncrementThreadMessageCount(thread.ID, thread.ChannelID)
+			h.bus.Publish(events.Event{
+				Type: events.ThreadMessageCreated,
+				Data: events.ThreadMessageCreatedData{
+					Message:        msg,
+					ThreadID:       thread.ID,
+					ChannelID:      thread.ChannelID,
+					AuthorID:       authorID,
+					AuthorName:     authorName,
+					ContentPreview: contentPreview,
+				},
+			})
+		}
+	}
+
 	created(w, msg)
 }
 
@@ -153,7 +172,7 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msgID := chi.URLParam(r, "id")
-	msg, err := h.db.GetMessageByID(msgID)
+	msg, err := h.store.GetMessageByID(msgID)
 	if err != nil {
 		errResp(w, http.StatusNotFound, "message not found")
 		return
@@ -167,12 +186,12 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.AddReaction(msgID, u.ID, req.Emoji); err != nil {
+	if err := h.store.AddReaction(msgID, msg.ChannelID, u.ID, req.Emoji); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to add reaction")
 		return
 	}
 
-	reactions, _ := h.db.GetReactions(msgID)
+	reactions, _ := h.store.GetReactions(msgID, msg.ChannelID)
 	h.bus.Publish(events.Event{
 		Type: events.ReactionUpdated,
 		Data: events.ReactionUpdatedData{
@@ -205,18 +224,18 @@ func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 	}
 	emoji := req.Emoji
 
-	msg, err := h.db.GetMessageByID(msgID)
+	msg, err := h.store.GetMessageByID(msgID)
 	if err != nil {
 		errResp(w, http.StatusNotFound, "message not found")
 		return
 	}
 
-	if err := h.db.RemoveReaction(msgID, u.ID, emoji); err != nil {
+	if err := h.store.RemoveReaction(msgID, msg.ChannelID, u.ID, emoji); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to remove reaction")
 		return
 	}
 
-	reactions, _ := h.db.GetReactions(msgID)
+	reactions, _ := h.store.GetReactions(msgID, msg.ChannelID)
 	h.bus.Publish(events.Event{
 		Type: events.ReactionUpdated,
 		Data: events.ReactionUpdatedData{
@@ -240,13 +259,13 @@ func (h *Handler) EditMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := chi.URLParam(r, "id")
-	msg, err := h.db.GetMessageByID(id)
+	msg, err := h.store.GetMessageByID(id)
 	if err != nil {
 		errResp(w, http.StatusNotFound, "message not found")
 		return
 	}
 
-	if msg.UserID != u.ID && !h.db.HasPermission(u, db.PermManageMessages) {
+	if msg.UserID != u.ID && !h.store.HasPermission(u, db.PermManageMessages) {
 		errResp(w, http.StatusForbidden, "cannot edit this message")
 		return
 	}
@@ -265,12 +284,12 @@ func (h *Handler) EditMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.EditMessage(id, req.Content); err != nil {
+	if err := h.store.EditMessage(id, req.Content); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to edit message")
 		return
 	}
 
-	updated, _ := h.db.GetMessageByID(id)
+	updated, _ := h.store.GetMessageByID(id)
 	h.bus.Publish(events.Event{
 		Type: events.MessageEdited,
 		Data: events.MessageEditedData{
@@ -289,19 +308,19 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := chi.URLParam(r, "id")
-	msg, err := h.db.GetMessageByID(id)
+	msg, err := h.store.GetMessageByID(id)
 	if err != nil {
 		errResp(w, http.StatusNotFound, "message not found")
 		return
 	}
 
-	if msg.UserID != u.ID && !h.db.HasPermission(u, db.PermManageMessages) {
+	if msg.UserID != u.ID && !h.store.HasPermission(u, db.PermManageMessages) {
 		errResp(w, http.StatusForbidden, "cannot delete this message")
 		return
 	}
 
 	channelID := msg.ChannelID
-	if err := h.db.DeleteMessage(id); err != nil {
+	if err := h.store.DeleteMessage(id); err != nil {
 		errResp(w, http.StatusInternalServerError, "failed to delete message")
 		return
 	}

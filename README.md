@@ -9,12 +9,8 @@ alt="Jenn The Wren">
 
 # Chirm
 [Chirm.org](https://chirm.org)
-[View The Demo](https://chirm.org/preview.html)
 
-
-![Preview Page On Chirm Website](https://jejunecartoons.com/wp-content/uploads/2026/02/Screenshot-2026-02-26-124549.png)
-
-**Self-hosted community chat.** Real-Time Messaging with voice, video, and screen sharing for your Raspberry Pi, VPS, or home server. Single binary, SQLite database, zero external dependencies.
+**Self-hosted community chat.** Real-Time Messaging with voice, video, and screen sharing for your Raspberry Pi, VPS, or home server. Single binary, SQLite databases, zero external dependencies.
 
 > *The Wren may be small, but its song fills the forest.*
 
@@ -26,6 +22,7 @@ alt="Jenn The Wren">
 
 - **Real-time chat** via WebSockets with auto-reconnect
 - **Multiple channels** organized into collapsible categories with drag-to-reorder
+- **Threads** — create threaded discussions from any channel message; forum and gallery channel types support thread-first layouts
 - **Message replies** — thread context without the complexity
 - **@mention autocomplete** — type `@` to find and ping members
 - **Emoji reactions** on any message
@@ -51,6 +48,7 @@ alt="Jenn The Wren">
 - **File uploads** — images, video, audio, PDFs, text, and ZIP archives
 - **Inline previews** — images, video, and audio render directly in chat
 - **Configurable size limit** — set max upload size per server (default 25 MB)
+- **Per-user storage quotas** — set a cap on how much each user can upload
 - **Orphan cleanup** — background job removes uploaded files never attached to a message
 
 ### Notifications
@@ -70,11 +68,14 @@ alt="Jenn The Wren">
 - **Server customization** — upload a server icon and login background
 - **User avatars** — each member can upload their own profile image
 - **Channel emoji** — assign an emoji icon to any channel
+- **Bot API** — create token-scoped bots that can post messages via the REST API
+- **Audit logging** — optional structured audit log with configurable per-day retention
+- **TOTP / 2FA** — enable time-based one-time passwords on your account for an extra login step; backup codes included
 
 ### Security & Deployment
 
 - **Single binary** — Go's `//go:embed` bundles all static assets, no web server required
-- **SQLite + WAL** — one-file database, zero-setup, easy backups
+- **SQLite + WAL** — four isolated databases (server, members, auth, per-channel), zero-setup, easy backups
 - **Auto-TLS** — generates a persistent local CA and signed server certificate on first run; serves the CA at `/ca-cert` for one-click device trust
 - **Custom TLS** — bring your own certs (Let's Encrypt, Tailscale, mkcert) via env vars or `certs/` directory
 - **Per-IP rate limiting** — auth endpoints are throttled to prevent brute-force
@@ -125,10 +126,13 @@ Open `https://localhost:8443` (accept the self-signed cert via advanced settings
 | `JWT_SECRET` | *(required)* | Secret for signing JWTs — generate with `openssl rand -hex 32` |
 | `PORT` | `8080` | HTTP listen port |
 | `HTTPS_PORT` | `8443` | HTTPS listen port |
-| `DATA_DIR` | `./data` | Directory for SQLite DB and uploads |
+| `DATA_DIR` | `./data` | Directory for SQLite databases and uploads |
 | `CHIRM_TLS_CERT` | *(auto)* | Path to a custom TLS certificate |
 | `CHIRM_TLS_KEY` | *(auto)* | Path to a custom TLS private key |
 | `ALLOWED_ORIGIN` | *(same-host)* | Full origin for WebSocket upgrades behind a reverse proxy |
+| `MAX_UPLOAD_MB` | `50` | Default max file upload size (overridable per-server in settings) |
+| `AUDIT_LOG_PATH` | *(disabled)* | Path to the audit log file; directory must exist |
+| `LOG_RETENTION_DAYS` | `7` | Days of audit logs to keep before pruning |
 
 All configuration is via environment variables or a `.env` file (loaded automatically, never overrides existing env vars).
 
@@ -181,17 +185,33 @@ chirm/
 ├── main.go                      Entry point, router, TLS, .env loader
 ├── .env.example                 Documented env var template
 ├── internal/
-│   ├── auth/auth.go             JWT generation & bcrypt hashing
-│   ├── db/db.go                 SQLite schema, models, all queries
-│   ├── middleware/middleware.go  JWT auth middleware
+│   ├── auth/auth.go             JWT generation, bcrypt hashing, TOTP
+│   ├── db/
+│   │   ├── store.go             Store struct, New(), permission constants, NewID()
+│   │   ├── channel_store.go     ChannelStore — lazy-open per-channel *sql.DB cache
+│   │   ├── migrate.go           Embedded migration runner (server/members/auth/channel)
+│   │   ├── models.go            Shared types: User, Channel, Message, Thread, Bot …
+│   │   ├── messages.go          Message / attachment / reaction queries (channel DBs)
+│   │   ├── threads.go           Thread create/list/delete, thread_index maintenance
+│   │   ├── channels.go          Channel + category CRUD (server.db)
+│   │   ├── users.go / roles.go  User and role queries (members.db)
+│   │   ├── bots.go              Bot token management (server.db)
+│   │   ├── csrf.go / totp.go …  Auth-tier queries (auth.db)
+│   │   └── propagate.go         PropagateProfileUpdate, PropagateBotRename, ReconcileStorageUsed
+│   ├── events/                  Domain event bus (types + pub/sub)
+│   ├── hub/                     WebSocket hub, voice rooms
+│   ├── middleware/middleware.go  JWT + bot-token auth middleware
+│   ├── plugin/plugin.go         Plugin interface and sandboxed context
 │   └── handlers/
 │       ├── handlers.go          Handler struct, WS upgrader, helpers
-│       ├── hub.go               WebSocket hub — broadcast, voice rooms, WebRTC relay
+│       ├── hub.go               WebSocket message dispatch, voice rooms, WebRTC relay
 │       ├── setup.go             First-run setup
-│       ├── auth.go              Login, register, logout
+│       ├── auth.go              Login, register, logout, TOTP, profile update
 │       ├── channels.go          Channel & category CRUD, reordering
 │       ├── messages.go          Message CRUD, replies, reactions, pagination
+│       ├── threads.go           Thread CRUD, thread message send/list
 │       ├── users.go             User & role management, invites, settings
+│       ├── bots.go              Bot management (admin)
 │       ├── uploads.go           File upload with MIME validation
 │       ├── emojis.go            Custom emoji upload & management
 │       ├── linkpreview.go       OpenGraph link preview fetcher with cache
@@ -220,105 +240,139 @@ Static files are **embedded in the binary** via Go's `//go:embed` directive. Dep
 
 ## API Reference
 
+All endpoints are under `/api/v1/`. The legacy `/api/` prefix redirects automatically.
+
 ### Auth
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `POST` | `/api/setup` | First-run setup |
-| `GET` | `/api/setup/status` | Check if setup is complete |
-| `POST` | `/api/auth/login` | Login (rate-limited) |
-| `POST` | `/api/auth/register` | Register (rate-limited) |
-| `POST` | `/api/auth/logout` | Logout |
-| `GET` | `/api/me` | Get current user |
-| `PUT` | `/api/me` | Update profile |
-| `POST` | `/api/me/avatar` | Upload avatar |
-| `GET` | `/api/public-settings` | Get public server settings |
-| `GET` | `/api/join/{code}` | Validate invite code |
+| `POST` | `/api/v1/setup` | First-run setup |
+| `GET` | `/api/v1/setup/status` | Check if setup is complete |
+| `POST` | `/api/v1/auth/login` | Login (rate-limited) |
+| `POST` | `/api/v1/auth/register` | Register (rate-limited) |
+| `POST` | `/api/v1/auth/logout` | Logout |
+| `POST` | `/api/v1/auth/totp` | Complete TOTP second step (pending session token) |
+| `POST` | `/api/v1/auth/refresh` | Rotate refresh token, get new access JWT |
+| `GET` | `/api/v1/me` | Get current user |
+| `PUT` | `/api/v1/me` | Update profile |
+| `POST` | `/api/v1/me/avatar` | Upload avatar |
+| `POST` | `/api/v1/me/banner` | Upload profile banner |
+| `PUT` | `/api/v1/me/status` | Update online status |
+| `POST` | `/api/v1/me/totp/setup` | Generate TOTP secret |
+| `POST` | `/api/v1/me/totp/confirm` | Activate TOTP (verify first code) |
+| `DELETE` | `/api/v1/me/totp` | Disable TOTP |
+| `GET` | `/api/v1/public-settings` | Get public server settings |
+| `GET` | `/api/v1/join/{code}` | Validate invite code |
 
 ### Channels & Categories
 
 | Method | Path | Auth |
 | --- | --- | --- |
-| `GET` | `/api/channels` | Any |
-| `POST` | `/api/channels` | Admin |
-| `PUT` | `/api/channels/{id}` | Admin |
-| `DELETE` | `/api/channels/{id}` | Admin |
-| `POST` | `/api/channels/reorder` | Admin |
-| `GET` | `/api/channel-categories` | Any |
-| `POST` | `/api/channel-categories` | Admin |
-| `PUT` | `/api/channel-categories/{id}` | Admin |
-| `DELETE` | `/api/channel-categories/{id}` | Admin |
-| `POST` | `/api/channel-categories/reorder` | Admin |
+| `GET` | `/api/v1/channels` | Any |
+| `POST` | `/api/v1/channels` | Admin |
+| `PUT` | `/api/v1/channels/{id}` | Admin |
+| `DELETE` | `/api/v1/channels/{id}` | Admin |
+| `POST` | `/api/v1/channels/reorder` | Admin |
+| `GET` | `/api/v1/channel-categories` | Any |
+| `POST` | `/api/v1/channel-categories` | Admin |
+| `PUT` | `/api/v1/channel-categories/{id}` | Admin |
+| `DELETE` | `/api/v1/channel-categories/{id}` | Admin |
+| `POST` | `/api/v1/channel-categories/reorder` | Admin |
 
 ### Messages & Reactions
 
 | Method | Path | Auth |
 | --- | --- | --- |
-| `GET` | `/api/channels/{id}/messages` | Any |
-| `POST` | `/api/channels/{id}/messages` | Any |
-| `PUT` | `/api/messages/{id}` | Author/Admin |
-| `DELETE` | `/api/messages/{id}` | Author/Admin |
-| `POST` | `/api/messages/{id}/reactions` | Any |
-| `DELETE` | `/api/messages/{id}/reactions/{emoji}` | Any |
+| `GET` | `/api/v1/channels/{id}/messages` | Any |
+| `POST` | `/api/v1/channels/{id}/messages` | Any |
+| `PUT` | `/api/v1/messages/{id}` | Author/Admin |
+| `DELETE` | `/api/v1/messages/{id}` | Author/Admin |
+| `POST` | `/api/v1/messages/{id}/reactions` | Any |
+| `DELETE` | `/api/v1/messages/{id}/reactions` | Any |
+
+### Threads
+
+| Method | Path | Auth |
+| --- | --- | --- |
+| `GET` | `/api/v1/channels/{id}/threads` | Any |
+| `POST` | `/api/v1/channels/{id}/threads` | Any |
+| `DELETE` | `/api/v1/threads/{id}` | Author/Admin |
+| `GET` | `/api/v1/threads/{id}/messages` | Any |
+| `POST` | `/api/v1/threads/{id}/messages` | Any |
+| `GET` | `/api/v1/threads/{id}/first-message` | Any |
 
 ### Custom Emoji
 
 | Method | Path | Auth |
 | --- | --- | --- |
-| `GET` | `/api/emojis` | Any |
-| `POST` | `/api/emojis` | Any |
-| `DELETE` | `/api/emojis/{id}` | Admin |
+| `GET` | `/api/v1/emojis` | Any |
+| `POST` | `/api/v1/emojis` | Admin |
+| `DELETE` | `/api/v1/emojis/{id}` | Admin |
 
 ### Users, Roles & Invites
 
 | Method | Path | Auth |
 | --- | --- | --- |
-| `GET` | `/api/users` | Admin |
-| `PUT` | `/api/users/{id}` | Admin |
-| `DELETE` | `/api/users/{id}` | Admin |
-| `GET` | `/api/members` | Any |
-| `GET` | `/api/roles` | Any |
-| `POST` | `/api/roles` | Admin |
-| `PUT` | `/api/roles/{id}` | Admin |
-| `DELETE` | `/api/roles/{id}` | Admin |
-| `POST` | `/api/users/{id}/roles/{roleId}` | Admin |
-| `DELETE` | `/api/users/{id}/roles/{roleId}` | Admin |
-| `GET` | `/api/invites` | Admin |
-| `POST` | `/api/invites` | Admin |
-| `DELETE` | `/api/invites/{code}` | Admin |
+| `GET` | `/api/v1/users` | Admin |
+| `GET` | `/api/v1/users/{id}` | Any |
+| `PUT` | `/api/v1/users/{id}` | Admin |
+| `DELETE` | `/api/v1/users/{id}` | Admin |
+| `GET` | `/api/v1/members` | Any |
+| `GET` | `/api/v1/roles` | Any |
+| `POST` | `/api/v1/roles` | Admin |
+| `PUT` | `/api/v1/roles/{id}` | Admin |
+| `DELETE` | `/api/v1/roles/{id}` | Admin |
+| `POST` | `/api/v1/users/{id}/roles/{roleId}` | Admin |
+| `DELETE` | `/api/v1/users/{id}/roles/{roleId}` | Admin |
+| `GET` | `/api/v1/invites` | Admin |
+| `POST` | `/api/v1/invites` | Admin |
+| `DELETE` | `/api/v1/invites/{code}` | Admin |
+
+### Bots
+
+Bots authenticate using `Authorization: Bearer chirm_bot_<token>` instead of a user JWT.
+
+| Method | Path | Auth |
+| --- | --- | --- |
+| `GET` | `/api/v1/bots` | Admin |
+| `POST` | `/api/v1/bots` | Admin |
+| `PUT` | `/api/v1/bots/{id}` | Admin |
+| `DELETE` | `/api/v1/bots/{id}` | Admin |
+| `POST` | `/api/v1/bots/{id}/regenerate-token` | Admin |
 
 ### Server Settings
 
 | Method | Path | Auth |
 | --- | --- | --- |
-| `GET` | `/api/settings` | Admin |
-| `PUT` | `/api/settings` | Admin |
-| `POST` | `/api/settings/icon` | Admin |
-| `POST` | `/api/settings/login-bg` | Admin |
+| `GET` | `/api/v1/settings` | Admin |
+| `PUT` | `/api/v1/settings` | Admin |
+| `POST` | `/api/v1/settings/icon` | Admin |
+| `POST` | `/api/v1/settings/login-bg` | Admin |
 
 ### Files & Previews
 
 | Method | Path | Auth |
 | --- | --- | --- |
-| `POST` | `/api/upload` | Any |
-| `GET` | `/uploads/{filename}` | Public |
-| `GET` | `/api/link-preview` | Any |
+| `POST` | `/api/v1/upload` | Any |
+| `GET` | `/api/v1/uploads/{filename}` | Any |
+| `GET` | `/uploads/{filename}` | Public (server icons, login backgrounds) |
+| `GET` | `/api/v1/link-preview` | Any |
 
 ### Push Notifications
 
 | Method | Path | Auth |
 | --- | --- | --- |
-| `GET` | `/api/push/vapid-public-key` | Any |
-| `POST` | `/api/push/subscribe` | Any |
-| `POST` | `/api/push/unsubscribe` | Any |
-| `GET` | `/api/push/poll` | Any |
-| `POST` | `/api/push/test` | Any |
+| `GET` | `/api/v1/push/vapid-public-key` | Any |
+| `POST` | `/api/v1/push/subscribe` | Any |
+| `POST` | `/api/v1/push/unsubscribe` | Any |
+| `GET` | `/api/v1/push/poll` | Any |
+| `POST` | `/api/v1/push/test` | Any |
 
 ### Voice
 
 | Method | Path | Auth |
 | --- | --- | --- |
-| `GET` | `/api/voice/rooms` | Any |
+| `GET` | `/api/v1/voice/rooms` | Any |
 
 ### TLS
 
@@ -334,6 +388,7 @@ Static files are **embedded in the binary** via Go's `//go:embed` directive. Dep
 
 ```json
 { "type": "subscribe",          "data": { "channel_id": "..." } }
+{ "type": "thread_subscribe",   "data": { "channel_id": "..." } }
 { "type": "typing",             "data": { "channel_id": "..." } }
 { "type": "voice.join",         "data": { "channel_id": "..." } }
 { "type": "voice.leave",        "data": { "channel_id": "..." } }
@@ -346,22 +401,36 @@ Static files are **embedded in the binary** via Go's `//go:embed` directive. Dep
 **Server → Client:**
 
 ```json
-{ "type": "message.new",       "data": { ...message } }
-{ "type": "message.edit",      "data": { ...message } }
-{ "type": "message.delete",    "data": { "id": "...", "channel_id": "..." } }
-{ "type": "channel.new",       "data": { ...channel } }
-{ "type": "channel.update",    "data": { ...channel } }
-{ "type": "channel.delete",    "data": { "id": "..." } }
-{ "type": "typing",            "data": { "user_id": "...", "channel_id": "..." } }
-{ "type": "voice.room_state",  "data": { "channel_id": "...", "participants": ["..."] } }
-{ "type": "voice.joined",      "data": { "channel_id": "...", "user_id": "..." } }
-{ "type": "voice.left",        "data": { "channel_id": "...", "user_id": "..." } }
-{ "type": "voice.offer",       "data": { "channel_id": "...", "from_user_id": "...", "payload": {} } }
-{ "type": "voice.answer",      "data": { "channel_id": "...", "from_user_id": "...", "payload": {} } }
-{ "type": "voice.ice",         "data": { "channel_id": "...", "from_user_id": "...", "payload": {} } }
-{ "type": "voice.media_state", "data": { "channel_id": "...", "from_user_id": "...", "cam_enabled": false, "screen_sharing": false } }
-{ "type": "reaction.add",      "data": { "message_id": "...", "user_id": "...", "emoji": "..." } }
-{ "type": "reaction.remove",   "data": { "message_id": "...", "user_id": "...", "emoji": "..." } }
+{ "type": "message.new",            "data": { ...message } }
+{ "type": "message.edit",           "data": { ...message } }
+{ "type": "message.delete",         "data": { "id": "...", "channel_id": "..." } }
+{ "type": "message.activity",       "data": { "channel_id": "...", "channel_name": "...", "author_id": "...", "author": "...", "preview": "...", "message_id": "..." } }
+{ "type": "thread.new",             "data": { "thread": {...}, "channel_id": "..." } }
+{ "type": "thread.delete",          "data": { "thread_id": "...", "channel_id": "..." } }
+{ "type": "thread.message.new",     "data": { ...message } }
+{ "type": "thread.message.delete",  "data": { "id": "...", "thread_id": "...", "channel_id": "..." } }
+{ "type": "channel.new",            "data": { ...channel } }
+{ "type": "channel.update",         "data": { ...channel } }
+{ "type": "channel.delete",         "data": { "id": "..." } }
+{ "type": "channels.reorder",       "data": [ ...channels ] }
+{ "type": "category.new",           "data": { ...category } }
+{ "type": "categories.update",      "data": [ ...categories ] }
+{ "type": "category.delete",        "data": { "id": "...", "channels": [...] } }
+{ "type": "member.new",             "data": { ...user } }
+{ "type": "member.leave",           "data": { "id": "..." } }
+{ "type": "member.update",          "data": { "id": "...", "username": "...", "avatar": "..." } }
+{ "type": "member.status",          "data": { "id": "...", "status": "..." } }
+{ "type": "typing",                 "data": { "user_id": "...", "channel_id": "..." } }
+{ "type": "reaction.update",        "data": { "message_id": "...", "channel_id": "...", "reactions": [...] } }
+{ "type": "voice.room_state",       "data": { "channel_id": "...", "participants": ["..."] } }
+{ "type": "voice.joined",           "data": { "channel_id": "...", "user_id": "..." } }
+{ "type": "voice.left",             "data": { "channel_id": "...", "user_id": "..." } }
+{ "type": "voice.offer",            "data": { "channel_id": "...", "from_user_id": "...", "payload": {} } }
+{ "type": "voice.answer",           "data": { "channel_id": "...", "from_user_id": "...", "payload": {} } }
+{ "type": "voice.ice",              "data": { "channel_id": "...", "from_user_id": "...", "payload": {} } }
+{ "type": "voice.media_state",      "data": { "channel_id": "...", "from_user_id": "...", "cam_enabled": false, "screen_sharing": false } }
+{ "type": "emoji.new",              "data": { ...emoji } }
+{ "type": "emoji.delete",           "data": { "id": "..." } }
 ```
 
 ---
@@ -372,8 +441,12 @@ Your data lives entirely in `DATA_DIR` (default `./data`):
 
 ```
 data/
-├── chirm.db       ← SQLite database (all messages, users, settings)
-└── uploads/       ← Uploaded files
+├── server.db      ← channels, categories, settings, bots, custom emojis, invites
+├── members.db     ← users, roles, push subscriptions
+├── auth.db        ← sessions, refresh tokens, TOTP state, login lockouts
+├── channels/      ← one SQLite file per channel and per thread
+│   └── {id}.db
+└── uploads/       ← uploaded files
 ```
 
 To back up, just copy this directory. To restore, replace it.
@@ -423,11 +496,11 @@ Android and iOS will prompt to add it as a trusted CA.
 
 | Layer | Technology |
 | --- | --- |
-| Language | Go 1.21 |
+| Language | Go 1.22 |
 | Router | [chi](https://github.com/go-chi/chi) |
 | Database | SQLite via [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) (pure Go, no CGO) |
 | WebSocket | [gorilla/websocket](https://github.com/gorilla/websocket) |
-| Auth | JWT ([golang-jwt](https://github.com/golang-jwt/jwt)) + bcrypt |
+| Auth | JWT ([golang-jwt](https://github.com/golang-jwt/jwt)) + bcrypt + TOTP |
 | Voice/Video | WebRTC (browser-native), mesh P2P topology |
 | Push | Web Push with VAPID (hand-rolled, zero dependencies) |
 | Frontend | Vanilla HTML/CSS/JS, no build step |
